@@ -199,9 +199,32 @@ def test_well_readings_naive_from_is_treated_as_utc(populated_client: TestClient
 
 
 def test_ingest_status_before_any_run(empty_client: TestClient):
+    # Bare TestClient(app) (no `with`) never triggers the app's lifespan
+    # (verified empirically before adding the startup-ingest hook), so this
+    # exercises the request-handling path in isolation from that hook - see
+    # test_startup_lifespan_auto_ingests below for the real boot behavior.
     r = empty_client.get("/api/ingest/status")
     assert r.status_code == 200
     assert r.json() == {"has_run": False, "result": None}
+
+
+def test_startup_lifespan_auto_ingests(tmp_path: Path, data_root: Path):
+    # `with TestClient(...) as client:` does trigger lifespan, unlike the
+    # other tests here - covers the Project Description's "next time the app
+    # is run, new data is automatically picked up" requirement (app.py's
+    # lifespan hook), which nothing else in this file exercises.
+    db_path = tmp_path / "test.sqlite3"
+    db.connect(db_path).close()
+    app.dependency_overrides[get_settings] = lambda: _test_settings(data_root, db_path)
+
+    with TestClient(app) as client:
+        r = client.get("/api/ingest/status")
+        assert r.status_code == 200
+        status = r.json()
+        assert status["has_run"] is True
+        assert status["result"]["files_ingested"] == 36
+        assert status["result"]["wells_processed"] == 11
+        assert status["result"]["errors"] == []
 
 
 def test_ingest_run_then_status(empty_client: TestClient):

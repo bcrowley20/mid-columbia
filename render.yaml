@@ -1,0 +1,13 @@
+# Render Blueprint - https://render.com/docs/blueprint-spec
+# Lets Render provision this service automatically from the repo ("New +" ->
+# "Blueprint" -> pick this repo) instead of clicking through manual setup.
+# Manual setup also works fine without this file: Render auto-detects the
+# root Dockerfile when you create a plain "Web Service" from the repo.
+services:
+  - type: web
+    name: mid-columbia-fisheries
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /api/health

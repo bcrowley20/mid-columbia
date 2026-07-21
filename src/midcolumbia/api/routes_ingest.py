@@ -22,16 +22,16 @@ from .schemas import IngestRunOut, IngestStatusOut
 router = APIRouter(tags=["ingest"])
 
 
-@router.post("/ingest/run", response_model=IngestRunOut)
-def run_ingest(
-    request: Request,
-    settings: Settings = Depends(get_settings),
-    conn: sqlite3.Connection = Depends(get_db),
-) -> IngestRunOut:
+def run_ingest_and_compute(settings: Settings, conn: sqlite3.Connection) -> IngestRunOut:
+    """Runs scan_all() + compute_all() and builds the summary both the HTTP
+    endpoint and the app startup hook (app.py) report - factored out so
+    "what happened automatically at boot" and "what happened when someone
+    hit /ingest/run" are always represented the same way.
+    """
     scan_result = scan_all(settings.data_root, conn, settings.enabled_device_handlers)
     calc_result = compute_all(settings.data_root, conn, settings.calculations)
 
-    result = IngestRunOut(
+    return IngestRunOut(
         ran_at=datetime.now(timezone.utc),
         files_scanned=scan_result.files_scanned,
         files_ingested=scan_result.files_ingested,
@@ -42,6 +42,15 @@ def run_ingest(
         calculations_ok=calc_result.results_ok,
         calculations_unknown=calc_result.results_unknown,
     )
+
+
+@router.post("/ingest/run", response_model=IngestRunOut)
+def run_ingest(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> IngestRunOut:
+    result = run_ingest_and_compute(settings, conn)
     request.app.state.last_ingest_result = result
     return result
 
