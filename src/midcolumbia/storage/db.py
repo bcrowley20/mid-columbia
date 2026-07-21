@@ -143,6 +143,22 @@ def fetch_calculated_readings(conn: sqlite3.Connection, well_id: str, calculatio
     ]
 
 
+def count_distinct_timestamps(conn: sqlite3.Connection, well_id: str) -> int:
+    """"Number of data points" for a well, per the Project Description's hover
+    popup spec (section 11/12) - distinct sample times, not raw reading rows
+    (a single hourly sample yields two rows: pressure and temperature)."""
+    return conn.execute(
+        "SELECT COUNT(DISTINCT timestamp_utc) FROM readings WHERE well_id = ?", (well_id,)
+    ).fetchone()[0]
+
+
+def latest_reading_timestamp(conn: sqlite3.Connection, well_id: str) -> datetime | None:
+    row = conn.execute("SELECT MAX(timestamp_utc) FROM readings WHERE well_id = ?", (well_id,)).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return datetime.fromisoformat(row[0]).replace(tzinfo=timezone.utc)
+
+
 def fetch_readings(conn: sqlite3.Connection, well_id: str, parameter: ParameterType) -> list[Reading]:
     rows = conn.execute(
         "SELECT well_id, parameter, timestamp_utc, value, unit, source_file, source_row FROM readings "

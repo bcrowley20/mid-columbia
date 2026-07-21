@@ -44,6 +44,29 @@ def discover_project_folders(data_root: Path) -> list[str]:
     )
 
 
+def load_all(data_root: Path) -> list[Catalog]:
+    """Loads every project under data_root - what the API layer (section 11)
+    needs to search across all projects for a given well/site id."""
+    return [load_catalog(data_root, folder) for folder in discover_project_folders(data_root)]
+
+
+def find_well(catalogs: list[Catalog], well_id: str) -> Well | None:
+    for catalog in catalogs:
+        well = catalog.wells.get(well_id)
+        if well is not None:
+            return well
+    return None
+
+
+def find_site(catalogs: list[Catalog], site_id: str) -> tuple[Reach, Site] | None:
+    for catalog in catalogs:
+        for reach in catalog.project.reaches:
+            for site in reach.sites:
+                if site.id == site_id:
+                    return reach, site
+    return None
+
+
 def load_catalog(data_root: Path, project_folder: str) -> Catalog:
     project_dir = data_root / project_folder
     project_file = project_dir / "project.json5"

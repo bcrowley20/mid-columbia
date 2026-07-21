@@ -8,16 +8,20 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.139.2",
     "json5>=0.9.25",
     "openpyxl>=3.1.5",
     "tzdata>=2026.3",
+    "uvicorn>=0.51.0",
 ]
 
 [project.scripts]
 midcolumbia-ingest = "midcolumbia.ingest_cli:main"
+midcolumbia-serve = "midcolumbia.serve_cli:main"
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.7.0",
     "pytest>=8.0.0",
 ]
 

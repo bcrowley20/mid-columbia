@@ -1,6 +1,6 @@
 # Mid-Columbia Fisheries Data Analysis — Implementation Plan
 
-Status: draft v7 — **Phases 0–2 complete**; agreed direction for Phase 3, later phases sketched and open to revision as we build.
+Status: draft v8 — **Phases 0–3 complete**; agreed direction for Phase 4, later phases sketched and open to revision as we build.
 
 This plan is the working reference for implementation. Update it as decisions change; don't let it drift out of sync with the code.
 
@@ -72,11 +72,14 @@ mid-columbia/
       storage/
         db.py                     # SQLite schema, connection, upsert helpers
       api/
-        app.py                     # FastAPI app, routers
-        routes_projects.py
-        routes_wells.py
-        routes_readings.py
-        routes_ingest.py
+        app.py                     # FastAPI app, CORS, exception handlers, health check
+        deps.py                     # get_settings/get_db/get_catalogs dependencies
+        schemas.py                   # Pydantic response models
+        routes_projects.py            # GET /projects, GET /sites/summary
+        routes_wells.py                # GET /wells
+        routes_readings.py              # GET /wells/readings
+        routes_ingest.py                # POST /ingest/run, GET /ingest/status
+      serve_cli.py               # `uv run midcolumbia-serve` - runs the dev server
   web/
     (Vite project: index.html, src/, package.json)
   data/
@@ -108,7 +111,7 @@ mid-columbia/
     test_scanner.py             # integration: full scan against real Carlson data, idempotency, handler filtering
     test_calculations_water_depth.py   # formula/nearest-neighbor/gap-threshold unit tests
     test_calculations_runner.py         # integration: compute_all against real Carlson data
-    test_api.py                         # Phase 3
+    test_api.py                         # FastAPI TestClient, full endpoint coverage against real Carlson data
 ```
 
 ## 5. Data model (master dataclasses)
@@ -315,13 +318,27 @@ class Calculation(ABC):
 
 `ingest_cli.py` now chains ingestion and calculation: `uv run midcolumbia-ingest` runs `scan_all()` then `compute_all()` and prints both summaries. Run against the real Carlson data: **11 wells processed, 13,990 `"ok"` results, 0 `"unknown"`** (the sample ATM well fully covers the same hourly date range as every water well, so nothing falls outside the 12-hour gap tolerance in this dataset — the `"unknown"` paths are covered by unit tests with synthetic data instead, see §13).
 
-## 11. API surface (Phase 3, sketch)
+## 11. API surface — done (Phase 3)
 
-- `GET /api/projects` — hierarchical list (Project → Reach → Site → Well) for the left-hand tree.
-- `GET /api/sites/{id}/summary` — for map hover popups: reach name, site name, well name, point count, last reading timestamp.
-- `GET /api/wells/{id}/readings?parameter=&from=&to=` — time series for detail view.
-- `POST /api/ingest/run` — trigger a rescan; `GET /api/ingest/status` — last run result/errors.
-- CRUD endpoints for Project/Reach/Site/Well under Phase 5 (management UI).
+**A real bug caught by smoke-testing before writing the plan update or the pytest suite**: the originally sketched routes above used `{id}` **path** parameters (`/sites/{id}/summary`, `/wells/{id}/readings`). Since well/site/reach/project ids are `/`-joined slugs by design (§5's decided id scheme — e.g. `carlson-creek-restoration/lower-stream/site-1/gw-1`), they contain literal `/` characters, and Starlette's router treats `/` as a path-segment boundary no matter what's inside a `{placeholder}`. Every id-based route 404'd at the routing layer itself (never even reaching the handler) the first time they were actually hit with a real id. `:path` converters don't fix it either, since they're greedy and would swallow trailing segments like `/readings`. **Fix**: id-based lookups moved to **query parameters** instead of path segments — query strings don't have this ambiguity (a `/` inside a query value is just a value, unambiguous). The endpoints actually built:
+
+- `GET /api/projects` — hierarchical list (Project → Reach → Site → Well) for the left-hand tree. `response_model=list[ProjectOut]` (`api/schemas.py`).
+- `GET /api/sites/summary?site_id=` — for map hover popups: reach name, site name, and one entry per well with `well_name`, `point_count`, `last_reading_at` — matching the Project Description's exact hover-popup field list. `point_count` is `COUNT(DISTINCT timestamp_utc)`, not a raw row count (a single hourly sample is 2 rows — pressure + temperature — so a raw count would double what a biologist would call "number of data points"). 404 if the site id doesn't resolve.
+- `GET /api/wells?well_id=` — well metadata (name, type, device serial, resolved paired ATM well id). 404 if unresolved.
+- `GET /api/wells/readings?well_id=&parameter=&from=&to=` — time series, one consistent shape (`SeriesPointOut`: `timestamp_utc`, `value`, `unit`, `status`) whether `parameter` is a raw `ParameterType` value or the calculated `"water_depth"` — `status` is always `None` for raw readings (there's no "unknown" concept there) and `"ok"`/`"unknown_..."` for the calculation. An unrecognized `parameter` is a 400, an unresolved `well_id` is a 404. `from`/`to` are optional bounds; a value with no UTC offset is treated as UTC rather than raising (stored timestamps are always UTC — see §5), filtered in Python after fetching (fine at this data scale, would move to a SQL `WHERE` clause first if datasets got large enough to matter).
+- `POST /api/ingest/run` — runs `scan_all()` then `compute_all()` **synchronously within the request** (fast enough at v1 data scale — no background job queue built) and returns a summary (`IngestRunOut`); also stores it on `app.state.last_ingest_result`.
+- `GET /api/ingest/status` — returns the last run's summary, or `{"has_run": false, "result": null}` if the server hasn't run one yet. **In-memory only** (`app.state`) — resets on server restart. Acceptable for v1 (a fresh run is one request away); would need real persistence if "what happened on the last ingest" needs to survive a restart.
+- `GET /api/health` — trivial liveness check, added during Phase 3 (not in the original sketch) since it's useful for the frontend/tests to confirm the server is up.
+- CRUD endpoints for Project/Reach/Site/Well are Phase 5 (management UI), still not built.
+
+**Cross-cutting**:
+- `api/deps.py`: `get_settings()` loads `settings.json` fresh per call; `get_db()` yields a per-request `sqlite3.Connection` (opened/closed per request — cheap for SQLite, avoids any cross-request/thread-safety concerns); `get_catalogs()` calls the new `catalog.load_all(data_root)` (loads every project found under `data_root`, for searching across all of them). Tests override just `get_settings` via `app.dependency_overrides` — `get_db`/`get_catalogs` both depend on it, so one override redirects everything to an isolated `tmp_path` database while still reading the real `data/` tree.
+- New `catalog.py` helpers used by the API layer: `load_all()`, `find_well(catalogs, well_id)`, `find_site(catalogs, site_id)`.
+- New `storage/db.py` helpers: `count_distinct_timestamps()`, `latest_reading_timestamp()`.
+- `CatalogError`/`SettingsError` get a dedicated exception handler returning a `500` with the real message, instead of FastAPI's generic unhandled-exception response — these mean the app's own configuration is broken, which is worth a clear message (CLAUDE.md: "errors must be handled, not just ignored").
+- Permissive CORS for `localhost:5173`/`127.0.0.1:5173` (Vite's default dev port) added now, ahead of Phase 4, so the frontend won't hit a CORS wall on day one. Fine for a local-first, no-auth, single-user app (§9); would need reconsidering if this ever ran anywhere non-local.
+- `serve_cli.py` (`uv run midcolumbia-serve`) runs `uvicorn.run("midcolumbia.api.app:app", ...)` with `reload=True` for local dev, mirroring the `ingest_cli.py` pattern. Verified against real data with an actual running server (not just `TestClient`): `GET /api/health` and `GET /api/projects` both responded correctly over real HTTP on `127.0.0.1`.
+- Test dependency note: `httpx` (needed for FastAPI's `TestClient`) was replaced with **`httpx2`** — the installed Starlette version (1.3.1) deprecated `TestClient`'s use of `httpx` in favor of it; switching removed the deprecation warning entirely.
 
 ## 12. Frontend (Phase 4–5, sketch)
 
@@ -345,7 +362,7 @@ class Calculation(ABC):
 - **Phase 0 — done.** `uv init --package` scaffolding (`midcolumbia` package under `src/`, Python ≥3.13, `json5` + `pytest` deps); `models.py` with the §5 dataclasses; `settings.json` + `config.py` loader (raises `SettingsError` on missing/invalid config rather than silently defaulting); `project.json5`/`site.json5` written and validated for the real Carlson Creek Restoration example (§7); `.gitignore`; 13 passing tests (`uv run pytest`) covering the dataclasses, the settings loader (including error paths), and that the JSON5 files agree with the actual folder layout and file types on disk. Deliberately **not** built yet: the JSON5-to-dataclass catalog loader and the ingestion handlers themselves — those belong to Phase 1, next.
 - **Phase 1 — done.** `catalog.py` (JSON5 → dataclasses, id scheme, flat well lookup); `ingestion/base.py` (`LoggerHandler` ABC, `ParseError`) and both handlers (`hoboware_csv.py`, `hoboconnect_xlsx.py` — the latter revised after inspecting the real workbook structure, see §2/§6); `ingestion/scanner.py` (incremental rescan, per-file error isolation, handler filtering by `settings.enabled_device_handlers`); `storage/db.py` (SQLite schema + upserts); `ingest_cli.py` (`uv run midcolumbia-ingest`). 43 passing tests, including an integration test that runs a full scan against the real Carlson data and checks idempotency on rescan. One real bug was caught and fixed while writing tests: the CSV handler was dropping the first reading of every well because it skipped the whole row whenever a deployment marker fired, even though a launch-row can carry a marker *and* a valid reading (§2).
 - **Phase 2 — done.** `models.CalculatedReading`; `calculations/base.py` (`Calculation` ABC); `calculations/water_depth.py` (formula, `bisect`-based nearest-neighbor ATM pairing, gap-threshold and no-data unknown states); `calculations/runner.py` (`compute_all()`, full-recompute-every-run simplification); a fourth SQLite table (`calculated_readings`, nullable `value`); `ingest_cli.py` now runs calculations right after ingestion. 58 passing tests (up from 43) — 15 new, covering the formula, nearest-neighbor/gap-threshold edge cases with synthetic data, NULL round-tripping, and an integration run against the real Carlson data (11 wells, 13,990 `"ok"` results, 0 `"unknown"`).
-- **Phase 3** — FastAPI backend: read endpoints for tree/map/detail data, ingest trigger.
+- **Phase 3 — done.** FastAPI app (`api/app.py`, `deps.py`, `schemas.py`) and four routers covering every endpoint from §11: project tree, site summary, well metadata, well readings (raw + calculated, unified shape), ingest trigger/status, plus a health check. `catalog.load_all/find_well/find_site` and `db.count_distinct_timestamps/latest_reading_timestamp` added to support them. `serve_cli.py` (`uv run midcolumbia-serve`). 73 passing tests (up from 58) — 15 new, all against the real Carlson data via `TestClient`, plus a real running-server smoke test. One real bug caught before it reached the test suite: `/`-containing ids don't work as REST path parameters (Starlette routing, not application logic) — fixed by moving id-based lookups to query parameters, documented in §11.
 - **Phase 4** — Frontend shell: tree + Leaflet map + hover popups, wired to the Phase 3 API.
 - **Phase 5** — Site Management UI: add/edit/delete Project/Reach/Site/Well, backed by new CRUD endpoints.
 - **Phase 6** — Detail data view: design (with user) + implement.
@@ -363,3 +380,6 @@ Each phase ends with passing tests before moving to the next.
 - Iconography for map markers beyond "dots" (Phase 4, per Project Description — deferred by them too).
 - Detail view design (Phase 6, deferred by Project Description).
 - Display units/timezone preference (store UTC + source units internally regardless; decide user-facing default in Phase 4).
+- `POST /api/ingest/run` runs synchronously in-request; fine at v1 data scale (a couple seconds for the whole real dataset) but would need to become a background job with polling/websocket status if a much larger dataset ever made a single scan take long enough to risk a request timeout.
+- `GET /api/ingest/status`'s last-run result lives in `app.state` only, not persisted — lost on server restart (§11). Revisit if "what happened on the last ingest" ever needs to survive a restart.
+- CORS is hardcoded to Vite's default local dev origins (`localhost:5173`/`127.0.0.1:5173`) — fine until the frontend's actual dev port is confirmed in Phase 4, or if a non-local deployment is ever considered (out of scope per §9, but worth remembering CORS would need real thought then, not just widening the allowlist).
