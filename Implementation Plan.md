@@ -45,7 +45,7 @@ The sample set at `data/Carlson Creek Restoration/Lower Stream/` (5 sites, each 
 - **XLSX parsing**: `openpyxl` (read-only mode for performance on large sheets).
 - **Frontend**: plain TypeScript + Vite (no heavy SPA framework required for v1's scope: a tree view, a map, hover popups, and a management form set). **Leaflet** for the map (no API key needed, works fine for local-first use, easy to swap tile providers later). **Chart.js** for the detail-view time series once that's defined (Phase 6).
   - This is a recommendation, not a locked decision — revisit if the UI grows complex enough to want React/Svelte for state management.
-- **Testing**: `pytest`, run via `uv run pytest`. Real Carlson CSV/XLSX files double as parser test fixtures.
+- **Testing**: `pytest`, run via `uv run pytest`. Real Carlson CSV/XLSX files double as parser test fixtures. Do not re-run tests after documentation updates.
 
 ## 4. Codebase layout
 
