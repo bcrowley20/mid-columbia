@@ -1,0 +1,24 @@
+[project]
+name = "midcolumbia"
+version = "0.1.0"
+description = "Data ingestion and analysis tool for Mid-Columbia Fisheries stream restoration monitoring"
+readme = "README.md"
+authors = [
+    { name = "Brian Crowley", email = "brian@crowleynet.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "json5>=0.9.25",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

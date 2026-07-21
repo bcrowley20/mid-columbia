@@ -1,0 +1,26 @@
+{
+    // Site settings - see "Implementation Plan.md" section 7.
+    name: "Site 5",
+
+    // Not yet known - to be filled in via the Site Management UI (Phase 5).
+    latitude: null,
+    longitude: null,
+
+    wells: [
+        {
+            name: "GW 5",
+            folder: "GW 5",
+            type: "groundwater", // "in_stream" | "groundwater"
+            device_serial: "22332700",
+            // null = use the Reach's default ATM well (see project.json5)
+            paired_atm_well: null,
+        },
+        {
+            name: "IS 5",
+            folder: "IS 5",
+            type: "in_stream",
+            device_serial: "22449420",
+            paired_atm_well: null,
+        },
+    ],
+}

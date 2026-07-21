@@ -1,0 +1,35 @@
+{
+    // Site settings - see "Implementation Plan.md" section 7.
+    name: "Site 3",
+
+    // Not yet known - to be filled in via the Site Management UI (Phase 5).
+    latitude: null,
+    longitude: null,
+
+    // Site 3 has two groundwater wells and one in-stream well - a Site can have
+    // any number of wells of a given type (Project Description note 3).
+    wells: [
+        {
+            name: "GW 3a",
+            folder: "GW 3a",
+            type: "groundwater", // "in_stream" | "groundwater"
+            device_serial: "22332697",
+            // null = use the Reach's default ATM well (see project.json5)
+            paired_atm_well: null,
+        },
+        {
+            name: "GW 3b",
+            folder: "GW 3b",
+            type: "groundwater",
+            device_serial: "22332698",
+            paired_atm_well: null,
+        },
+        {
+            name: "IS 3",
+            folder: "IS 3",
+            type: "in_stream",
+            device_serial: "22449418",
+            paired_atm_well: null,
+        },
+    ],
+}

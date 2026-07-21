@@ -1,0 +1,32 @@
+{
+    // Mid-Columbia Fisheries Data Analysis - Project settings
+    // See "Implementation Plan.md" section 7 for the config schema this follows.
+    name: "Carlson Creek Restoration",
+    description: "",
+
+    // IANA timezone used to interpret local logger timestamps that don't carry
+    // their own UTC offset (the HOBOconnect/XLSX format - see plan section 6).
+    timezone: "America/Los_Angeles",
+
+    map: {
+        center_lat: null,
+        center_lon: null,
+        zoom: 12,
+    },
+
+    // One entry per Reach folder under this project. Every Reach must have exactly
+    // one ATM (atmospheric) well, used as the default barometric reference for
+    // water depth calculations at any well in the Reach that doesn't override
+    // paired_atm_well in its own site.json5.
+    reaches: [
+        {
+            name: "Lower Stream",
+            folder: "Lower Stream",
+            atm_well: {
+                name: "Carlson ATM",
+                folder: "Carlson ATM",
+                device_serial: "22332694",
+            },
+        },
+    ],
+}

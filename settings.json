@@ -1,0 +1,11 @@
+{
+    "data_root": "data",
+    "database_path": "midcolumbia.sqlite3",
+    "enabled_device_handlers": ["hoboware_csv", "hoboconnect_xlsx"],
+    "display": {
+        "pressure_unit": "kPa",
+        "temperature_unit": "degC",
+        "depth_unit": "ft",
+        "timezone": "America/Los_Angeles"
+    }
+}
