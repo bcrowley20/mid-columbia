@@ -2,7 +2,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { fetchSiteSummary } from "./api";
-import type { ReachOut, SiteSummaryOut } from "./types";
+import type { ReachOut, SiteSummaryOut, WellOut } from "./types";
 
 // No default view configured yet (project.json5's map.center/zoom isn't wired
 // through the API - Phase 4 uses fitBounds on real site coordinates instead,
@@ -11,6 +11,9 @@ import type { ReachOut, SiteSummaryOut } from "./types";
 const FALLBACK_CENTER: L.LatLngExpression = [47.2547, -120.9048];
 const FALLBACK_ZOOM = 12;
 const SINGLE_SITE_ZOOM = 15;
+
+const SITE_MARKER_STYLE = { radius: 8, color: "#ffffff", weight: 2, fillColor: "#2563eb", fillOpacity: 0.9 };
+const ATM_MARKER_STYLE = { radius: 8, color: "#ffffff", weight: 2, fillColor: "#dc2626", fillOpacity: 0.9 };
 
 export class SiteMap {
   private readonly map: L.Map;
@@ -34,8 +37,10 @@ export class SiteMap {
       (site): site is typeof site & { latitude: number; longitude: number } =>
         site.latitude !== null && site.longitude !== null,
     );
+    const atmWell = reach.atm_well;
+    const atmLocated = atmWell.latitude !== null && atmWell.longitude !== null;
 
-    if (locatedSites.length === 0) {
+    if (locatedSites.length === 0 && !atmLocated) {
       this.showEmptyState(`No sites in "${reach.name}" have a location set yet.`);
       return;
     }
@@ -50,16 +55,19 @@ export class SiteMap {
       const latLng: L.LatLngExpression = [site.latitude, site.longitude];
       points.push(latLng);
 
-      const marker = L.circleMarker(latLng, {
-        radius: 8,
-        color: "#ffffff",
-        weight: 2,
-        fillColor: "#2563eb",
-        fillOpacity: 0.9,
-      });
+      const marker = L.circleMarker(latLng, SITE_MARKER_STYLE);
       marker.bindTooltip(renderSitePopup(summaries[index]), { direction: "top", offset: [0, -8] });
       marker.addTo(this.markersLayer);
     });
+
+    if (atmLocated) {
+      const latLng: L.LatLngExpression = [atmWell.latitude as number, atmWell.longitude as number];
+      points.push(latLng);
+
+      const marker = L.circleMarker(latLng, ATM_MARKER_STYLE);
+      marker.bindTooltip(renderAtmPopup(reach, atmWell), { direction: "top", offset: [0, -8] });
+      marker.addTo(this.markersLayer);
+    }
 
     if (points.length === 1) {
       this.map.setView(points[0], SINGLE_SITE_ZOOM);
@@ -94,6 +102,16 @@ function renderSitePopup(summary: SiteSummaryOut): string {
     <div class="site-popup">
       <div class="site-popup-title">${escapeHtml(summary.reach_name)} &rsaquo; ${escapeHtml(summary.site_name)}</div>
       ${wellRows}
+    </div>`;
+}
+
+function renderAtmPopup(reach: ReachOut, atmWell: WellOut): string {
+  return `
+    <div class="site-popup">
+      <div class="site-popup-title">${escapeHtml(reach.name)} &rsaquo; ${escapeHtml(atmWell.name)}</div>
+      <div class="popup-well">
+        <span class="popup-well-name">Atmospheric reference</span>
+      </div>
     </div>`;
 }
 

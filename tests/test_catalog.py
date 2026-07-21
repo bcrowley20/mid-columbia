@@ -37,6 +37,17 @@ def test_load_catalog_flat_wells_include_atm(data_root: Path):
     assert atm_well.well_type is WellType.ATMOSPHERIC
     assert atm_well.site_id is None
     assert atm_well.device_serial == "22332694"
+    assert atm_well.latitude == pytest.approx(47.2557)
+    assert atm_well.longitude == pytest.approx(-120.906)
+
+
+def test_site_wells_have_no_own_coordinates(data_root: Path):
+    # Site-affiliated wells' location is their parent Site's lat/long instead
+    # (models.Well) - only a reach-level ATM well carries its own.
+    catalog = load_catalog(data_root, "Carlson Creek Restoration")
+    gw1 = catalog.wells["carlson-creek-restoration/lower-stream/site-1/gw-1"]
+    assert gw1.latitude is None
+    assert gw1.longitude is None
 
 
 def test_wells_default_to_reach_atm_well(data_root: Path):

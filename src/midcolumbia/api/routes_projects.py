@@ -17,7 +17,7 @@ router = APIRouter(tags=["projects"])
 
 @router.get("/projects", response_model=list[ProjectOut])
 def list_projects(catalogs: list[Catalog] = Depends(get_catalogs)) -> list[ProjectOut]:
-    return [ProjectOut.from_project(catalog.project) for catalog in catalogs]
+    return [ProjectOut.from_project(catalog.project, catalog.wells) for catalog in catalogs]
 
 
 @router.get("/sites/summary", response_model=SiteSummaryOut)

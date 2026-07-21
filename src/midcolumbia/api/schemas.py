@@ -15,6 +15,10 @@ class WellOut(BaseModel):
     well_type: str
     device_serial: str | None
     paired_atm_well_id: str | None
+    # Only meaningful for a reach-level ATM well - a Site-affiliated well's
+    # location is its parent SiteOut's latitude/longitude instead (models.Well).
+    latitude: float | None
+    longitude: float | None
 
     @classmethod
     def from_well(cls, well: Well) -> WellOut:
@@ -24,6 +28,8 @@ class WellOut(BaseModel):
             well_type=well.well_type.value,
             device_serial=well.device_serial,
             paired_atm_well_id=well.paired_atm_well_id,
+            latitude=well.latitude,
+            longitude=well.longitude,
         )
 
 
@@ -48,15 +54,18 @@ class SiteOut(BaseModel):
 class ReachOut(BaseModel):
     id: str
     name: str
-    atm_well_id: str
+    # Full well (not just its id) so the frontend can plot it on the map
+    # alongside sites, distinctly colored (Phase 4 follow-up) - a reach-level
+    # well isn't reachable through `sites`, so it has to be included here.
+    atm_well: WellOut
     sites: list[SiteOut]
 
     @classmethod
-    def from_reach(cls, reach: Reach) -> ReachOut:
+    def from_reach(cls, reach: Reach, wells: dict[str, Well]) -> ReachOut:
         return cls(
             id=reach.id,
             name=reach.name,
-            atm_well_id=reach.atm_well_id,
+            atm_well=WellOut.from_well(wells[reach.atm_well_id]),
             sites=[SiteOut.from_site(s) for s in reach.sites],
         )
 
@@ -67,8 +76,12 @@ class ProjectOut(BaseModel):
     reaches: list[ReachOut]
 
     @classmethod
-    def from_project(cls, project: Project) -> ProjectOut:
-        return cls(id=project.id, name=project.name, reaches=[ReachOut.from_reach(r) for r in project.reaches])
+    def from_project(cls, project: Project, wells: dict[str, Well]) -> ProjectOut:
+        return cls(
+            id=project.id,
+            name=project.name,
+            reaches=[ReachOut.from_reach(r, wells) for r in project.reaches],
+        )
 
 
 class WellSiteSummary(BaseModel):

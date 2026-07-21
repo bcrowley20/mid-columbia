@@ -27,6 +27,10 @@
                 name: "Carlson ATM",
                 folder: "Carlson ATM",
                 device_serial: "22332694",
+                // Placeholder - same general area as the sites, to be moved
+                // to its real location by hand once known.
+                latitude: 47.25533,
+                longitude: -120.90511,
             },
         },
     ],

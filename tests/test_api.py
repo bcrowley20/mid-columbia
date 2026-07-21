@@ -76,6 +76,12 @@ def test_list_projects(populated_client: TestClient):
     assert reach["name"] == "Lower Stream"
     assert len(reach["sites"]) == 5
 
+    atm_well = reach["atm_well"]
+    assert atm_well["name"] == "Carlson ATM"
+    assert atm_well["well_type"] == "atmospheric"
+    assert atm_well["latitude"] is not None
+    assert atm_well["longitude"] is not None
+
     site3 = next(s for s in reach["sites"] if s["name"] == "Site 3")
     assert {w["name"] for w in site3["wells"]} == {"GW 3a", "GW 3b", "IS 3"}
 

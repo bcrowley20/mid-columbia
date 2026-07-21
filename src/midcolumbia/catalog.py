@@ -119,6 +119,8 @@ def _load_reach(
         folder_path=str(atm_dir.relative_to(data_root)),
         device_serial=atm_raw.get("device_serial"),
         paired_atm_well_id=None,
+        latitude=atm_raw.get("latitude"),
+        longitude=atm_raw.get("longitude"),
     )
     atm_wells_by_name = {atm_raw["name"]: atm_well_id}
 

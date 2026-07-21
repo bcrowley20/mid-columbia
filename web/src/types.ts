@@ -7,6 +7,10 @@ export interface WellOut {
   well_type: string;
   device_serial: string | null;
   paired_atm_well_id: string | null;
+  // Only meaningful for a reach-level ATM well - a Site-affiliated well's
+  // location is its parent SiteOut's latitude/longitude instead.
+  latitude: number | null;
+  longitude: number | null;
 }
 
 export interface SiteOut {
@@ -20,7 +24,7 @@ export interface SiteOut {
 export interface ReachOut {
   id: string;
   name: string;
-  atm_well_id: string;
+  atm_well: WellOut;
   sites: SiteOut[];
 }
 

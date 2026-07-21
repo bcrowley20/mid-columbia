@@ -5,8 +5,8 @@
     // Approximate - spaced along the reach from the user-provided reference
     // point (Phase 4). Precise per-site coordinates can be refined later via
     // the Site Management UI (Phase 5) or by hand-editing this file.
-    latitude: 47.2517,
-    longitude: -120.9032,
+    latitude: 47.25543,
+    longitude: -120.90471,
 
     // Site 3 has two groundwater wells and one in-stream well - a Site can have
     // any number of wells of a given type (Project Description note 3).

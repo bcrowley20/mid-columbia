@@ -73,6 +73,11 @@ class Well:
     folder_path: str
     device_serial: str | None
     paired_atm_well_id: str | None
+    # Only meaningful for a reach-level ATM well - a Site-affiliated well's
+    # location is its parent Site's latitude/longitude instead. None until
+    # set (same "unlocated until someone provides it" convention as Site).
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 @dataclass

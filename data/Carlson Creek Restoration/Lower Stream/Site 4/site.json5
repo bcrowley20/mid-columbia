@@ -5,8 +5,8 @@
     // Approximate - spaced along the reach from the user-provided reference
     // point (Phase 4). Precise per-site coordinates can be refined later via
     // the Site Management UI (Phase 5) or by hand-editing this file.
-    latitude: 47.2502,
-    longitude: -120.9024,
+    latitude: 47.25465,
+    longitude: -120.90491,
 
     wells: [
         {
