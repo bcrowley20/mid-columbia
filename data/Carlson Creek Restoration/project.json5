@@ -9,9 +9,10 @@
     timezone: "America/Los_Angeles",
 
     map: {
-        center_lat: null,
-        center_lon: null,
-        zoom: 12,
+        // User-provided reference point for the Lower Stream reach (Phase 4).
+        center_lat: 47.2547,
+        center_lon: -120.9048,
+        zoom: 15,
     },
 
     // One entry per Reach folder under this project. Every Reach must have exactly

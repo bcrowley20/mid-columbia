@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mid-Columbia Fisheries Data Analysis</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="app-header">
+        <h1>Mid-Columbia Fisheries Data Analysis</h1>
+      </header>
+      <div id="error-banner" class="banner banner-error" hidden></div>
+      <div id="layout">
+        <aside id="tree-pane">
+          <nav id="tree" aria-label="Projects"></nav>
+        </aside>
+        <main id="map-pane">
+          <div id="map"></div>
+          <div id="map-empty-state" class="map-empty-state" hidden></div>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

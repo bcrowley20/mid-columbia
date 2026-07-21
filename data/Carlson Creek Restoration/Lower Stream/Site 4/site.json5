@@ -2,9 +2,11 @@
     // Site settings - see "Implementation Plan.md" section 7.
     name: "Site 4",
 
-    // Not yet known - to be filled in via the Site Management UI (Phase 5).
-    latitude: null,
-    longitude: null,
+    // Approximate - spaced along the reach from the user-provided reference
+    // point (Phase 4). Precise per-site coordinates can be refined later via
+    // the Site Management UI (Phase 5) or by hand-editing this file.
+    latitude: 47.2502,
+    longitude: -120.9024,
 
     wells: [
         {

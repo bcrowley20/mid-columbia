@@ -1,6 +1,6 @@
 # Mid-Columbia Fisheries Data Analysis — Implementation Plan
 
-Status: draft v8 — **Phases 0–3 complete**; agreed direction for Phase 4, later phases sketched and open to revision as we build.
+Status: draft v9 — **Phases 0–4 complete**; agreed direction for Phase 5, later phases sketched and open to revision as we build.
 
 This plan is the working reference for implementation. Update it as decisions change; don't let it drift out of sync with the code.
 
@@ -40,6 +40,7 @@ The sample set at `data/Carlson Creek Restoration/Lower Stream/` (5 sites, each 
 ## 3. Tech stack
 
 - **Python 3.13+**, managed with `uv` (`uv init`, `uv add`, `uv run`).
+- **Node.js/npm** — needed starting Phase 4 for the frontend. Not present on this machine by default; installed via `brew install node` (v26.5.0/npm 11.17.0) when Phase 4 started. Worth having ready before a fresh-machine setup.
 - **Backend / API**: FastAPI + Uvicorn. Async-friendly, minimal boilerplate, plays well with `uv`, and gives us OpenAPI docs for free during development.
 - **Storage**: SQLite (via Python's stdlib `sqlite3`, or `sqlmodel`/`sqlalchemy` if the schema grows enough to want an ORM — decide at Phase 1 based on how the schema looks once written).
 - **XLSX parsing**: `openpyxl` (read-only mode for performance on large sheets).
@@ -80,8 +81,16 @@ mid-columbia/
         routes_readings.py              # GET /wells/readings
         routes_ingest.py                # POST /ingest/run, GET /ingest/status
       serve_cli.py               # `uv run midcolumbia-serve` - runs the dev server
-  web/
-    (Vite project: index.html, src/, package.json)
+  web/                        # Vite + TypeScript, no framework (section 12)
+    index.html                 # two-pane app shell: #tree-pane, #map-pane
+    vite.config.ts              # dev proxy: /api/* -> http://127.0.0.1:8000
+    src/
+      main.ts                    # bootstrap: fetch projects, wire tree -> map
+      api.ts                      # typed fetch wrappers for the Phase 3 API
+      types.ts                    # hand-kept mirror of api/schemas.py
+      tree.ts                     # Project > Reach > Site tree, reach selection
+      map.ts                       # Leaflet map, site dots, hover tooltips
+      style.css
   data/
     Carlson Creek Restoration/            # Project
       project.json5
@@ -267,7 +276,9 @@ Three tiers, matching both the Project Description and CLAUDE.md. Schemas below 
 
 2. **`data/<Project>/project.json5`** — project-level metadata, JSON5 with comments allowed. Contains display name, description, default map center/zoom, the **IANA timezone** used to interpret XLSX local timestamps (§6), and one entry per **Reach**, each declaring its own `folder` (relative to the project) and its required **ATM well** (`name`, `folder` relative to the Reach, `device_serial`). Sites are *not* listed here — they're discovered by walking the Reach folder for subdirectories that contain their own `site.json5` (see §6 scanner, Phase 1).
 
-3. **`data/<Project>/<Reach>/<Site>/site.json5`** — site-level metadata: display name, `latitude`/`longitude` (nullable — `null` until set via the Site Management UI, Phase 5), and a `wells` list. Each well entry has `name`, `folder` (relative to the site), `type` (`"in_stream"` | `"groundwater"`), `device_serial` (informational), and `paired_atm_well` (`null` = use the Reach's default ATM well).
+3. **`data/<Project>/<Reach>/<Site>/site.json5`** — site-level metadata: display name, `latitude`/`longitude` (nullable — `null` until set; see below), and a `wells` list. Each well entry has `name`, `folder` (relative to the site), `type` (`"in_stream"` | `"groundwater"`), `device_serial` (informational), and `paired_atm_well` (`null` = use the Reach's default ATM well).
+
+   **Updated in Phase 4**: Sites 1–5 now have real, user-provided coordinates rather than `null` (needed so the Phase 4 map has something to plot). The user gave one reach-wide reference point (47.2547, -120.9048 — real, lands near an actual "Carlson Creek"/"Carlson Creek Road" on the map); the 5 sites were spaced ~150–200m apart in a line around it as an approximation, since we don't have precise per-site GPS. `project.json5`'s `map.center_lat`/`center_lon` was set to the same reference point. Both are marked in-file as approximate and refinable later via hand-edit or the Phase 5 UI. The `null` path (no location set) is still real production behavior — a new project/site will start with `null` until someone provides coordinates, and the map (section 12) handles that case explicitly rather than assuming it can't happen.
 
 Every folder-backed entity carries an explicit `folder` field distinct from its display `name`, so a rename in the UI doesn't have to mean a filesystem rename (or vice versa).
 
@@ -332,7 +343,8 @@ class Calculation(ABC):
 - CRUD endpoints for Project/Reach/Site/Well are Phase 5 (management UI), still not built.
 
 **Cross-cutting**:
-- `api/deps.py`: `get_settings()` loads `settings.json` fresh per call; `get_db()` yields a per-request `sqlite3.Connection` (opened/closed per request — cheap for SQLite, avoids any cross-request/thread-safety concerns); `get_catalogs()` calls the new `catalog.load_all(data_root)` (loads every project found under `data_root`, for searching across all of them). Tests override just `get_settings` via `app.dependency_overrides` — `get_db`/`get_catalogs` both depend on it, so one override redirects everything to an isolated `tmp_path` database while still reading the real `data/` tree.
+- `api/deps.py`: `get_settings()` loads `settings.json` fresh per call; `get_db()` yields a per-request `sqlite3.Connection` (opened/closed per request); `get_catalogs()` calls the new `catalog.load_all(data_root)` (loads every project found under `data_root`, for searching across all of them). Tests override just `get_settings` via `app.dependency_overrides` — `get_db`/`get_catalogs` both depend on it, so one override redirects everything to an isolated `tmp_path` database while still reading the real `data/` tree.
+- **Bug found in Phase 4, fixed in `storage/db.py`**: `db.connect()` now passes `check_same_thread=False`. FastAPI runs sync dependencies/endpoints via a threadpool, and a single request's dependency setup/query/teardown can land on *different* pooled worker threads for the same connection object — sqlite3's default same-thread check rejects that even though there's never real concurrent access to one connection (each request still gets its own dedicated connection). This never surfaced in `TestClient`-based tests (§13), which never produced enough real concurrency to hit it — it only showed up once the actual frontend fired 5 parallel `/api/sites/summary` requests (`Promise.all` in `map.ts`) against a real running `uvicorn` process. A concrete example of why CLAUDE.md's "start the dev server and use the feature in a browser" matters beyond the test suite.
 - New `catalog.py` helpers used by the API layer: `load_all()`, `find_well(catalogs, well_id)`, `find_site(catalogs, site_id)`.
 - New `storage/db.py` helpers: `count_distinct_timestamps()`, `latest_reading_timestamp()`.
 - `CatalogError`/`SettingsError` get a dedicated exception handler returning a `500` with the real message, instead of FastAPI's generic unhandled-exception response — these mean the app's own configuration is broken, which is worth a clear message (CLAUDE.md: "errors must be handled, not just ignored").
@@ -340,13 +352,24 @@ class Calculation(ABC):
 - `serve_cli.py` (`uv run midcolumbia-serve`) runs `uvicorn.run("midcolumbia.api.app:app", ...)` with `reload=True` for local dev, mirroring the `ingest_cli.py` pattern. Verified against real data with an actual running server (not just `TestClient`): `GET /api/health` and `GET /api/projects` both responded correctly over real HTTP on `127.0.0.1`.
 - Test dependency note: `httpx` (needed for FastAPI's `TestClient`) was replaced with **`httpx2`** — the installed Starlette version (1.3.1) deprecated `TestClient`'s use of `httpx` in favor of it; switching removed the deprecation warning entirely.
 
-## 12. Frontend (Phase 4–5, sketch)
+## 12. Frontend — done (Phase 4)
 
-- Left pane: collapsible tree (Project > Reach > Site), driven by `/api/projects`.
-- Right pane: Leaflet map. Selecting a Reach in the tree re-centers/zooms the map and plots its sites as dots (iconography beyond dots is a later decision, per Project Description).
-- Hover popup on a site: Reach name, Site name, well name(s), point count, last data point — per Project Description's explicit list.
-- Click a site: opens the detail view (Phase 6, TBD).
-- Site Management UI: forms for create/edit/delete of Project/Reach/Site/Well (IS/GW/ATM), including lat/long entry (manual — no geocoding source specified) and ATM-pairing for water wells.
+**Left pane** (`tree.ts`): renders Project > Reach > Site from `GET /api/projects`, sites listed under each Reach for context. Only Reach labels are interactive (per this phase's scope — sites aren't clickable yet, that's Phase 6's detail view). Clicking a Reach highlights it and calls into the map. Keyboard-accessible (`tabIndex` + Enter/Space, not just click).
+
+**Right pane** (`map.ts`): a `SiteMap` class wrapping Leaflet. `showReach(reach)`:
+- Filters the reach's sites to those with non-null `latitude`/`longitude`.
+- If none are located: shows a small "No sites in *Reach* have a location set yet" banner over the map and leaves the view alone, rather than erroring or silently showing nothing. This is real, expected behavior — a brand-new project/reach starts with every site unlocated (§7) — not just an edge case guard.
+- Otherwise: fetches `GET /api/sites/summary` for every located site up front (a handful of parallel requests per reach) so hover is instant rather than round-tripping per-marker; plots each as an `L.circleMarker` ("dots," per the Project Description — iconography beyond that is still an open item, section 15); binds a Leaflet **tooltip** (hover-triggered, matching "as the user hovers... they see a popup" — Leaflet's `bindPopup` is click-triggered, `bindTooltip` is the hover one) containing Reach name, Site name, and one row per well with name/point-count/last-reading, exactly the Project Description's field list; `fitBounds`s the map to the located sites (or a single `setView` if there's only one).
+- Basemap: OpenStreetMap standard tiles, no API key, with attribution — fine for local single-user dev use per the existing "no API key" plan (§3).
+- No click-to-detail-view yet — explicitly Phase 6, not built here.
+
+**App shell** (`main.ts`, `index.html`, `style.css`): a header bar, an error banner (shown if `/api/projects` or a summary fetch fails — the frontend's baseline "errors must be handled" per CLAUDE.md), and the two-pane layout. The first project's first reach auto-selects on load so the map isn't blank on first paint.
+
+**Dev wiring**: `web/vite.config.ts` proxies `/api/*` to `http://127.0.0.1:8000` (the FastAPI dev server, `uv run midcolumbia-serve`) so the frontend calls relative paths — no hardcoded backend URL, no reliance on CORS during local dev (the CORS middleware from Phase 3 stays in place regardless, for the case of hitting the API directly from a browser without going through Vite).
+
+**Verified in an actual browser**, not just by type-checking (`npx tsc --noEmit` and `npm run build` both clean): no headless browser tool was preinstalled, so Playwright + its bundled Chromium were installed into the scratch dir and driven with a small script (`nav` → wait for tree text → wait for `.leaflet-interactive` markers → screenshot → hover a marker → screenshot → check console errors). This is what caught the SQLite thread-safety bug (§11) — it only reproduced under the real concurrent requests a live browser session generates, never under the sequential `TestClient` tests. After the fix: 5 markers render, tree matches the real hierarchy, the hover tooltip shows correct real data (`GW 1 — 1,271 pts — 4/20/2026, 10:00:00 AM`, etc., matching numbers already verified in Phases 1–3), and the console is clean.
+
+**Site Management UI** (add/edit/delete Project/Reach/Site/Well, lat/long entry, ATM-pairing) is still Phase 5 — not built here.
 
 ## 13. Testing strategy
 
@@ -363,7 +386,7 @@ class Calculation(ABC):
 - **Phase 1 — done.** `catalog.py` (JSON5 → dataclasses, id scheme, flat well lookup); `ingestion/base.py` (`LoggerHandler` ABC, `ParseError`) and both handlers (`hoboware_csv.py`, `hoboconnect_xlsx.py` — the latter revised after inspecting the real workbook structure, see §2/§6); `ingestion/scanner.py` (incremental rescan, per-file error isolation, handler filtering by `settings.enabled_device_handlers`); `storage/db.py` (SQLite schema + upserts); `ingest_cli.py` (`uv run midcolumbia-ingest`). 43 passing tests, including an integration test that runs a full scan against the real Carlson data and checks idempotency on rescan. One real bug was caught and fixed while writing tests: the CSV handler was dropping the first reading of every well because it skipped the whole row whenever a deployment marker fired, even though a launch-row can carry a marker *and* a valid reading (§2).
 - **Phase 2 — done.** `models.CalculatedReading`; `calculations/base.py` (`Calculation` ABC); `calculations/water_depth.py` (formula, `bisect`-based nearest-neighbor ATM pairing, gap-threshold and no-data unknown states); `calculations/runner.py` (`compute_all()`, full-recompute-every-run simplification); a fourth SQLite table (`calculated_readings`, nullable `value`); `ingest_cli.py` now runs calculations right after ingestion. 58 passing tests (up from 43) — 15 new, covering the formula, nearest-neighbor/gap-threshold edge cases with synthetic data, NULL round-tripping, and an integration run against the real Carlson data (11 wells, 13,990 `"ok"` results, 0 `"unknown"`).
 - **Phase 3 — done.** FastAPI app (`api/app.py`, `deps.py`, `schemas.py`) and four routers covering every endpoint from §11: project tree, site summary, well metadata, well readings (raw + calculated, unified shape), ingest trigger/status, plus a health check. `catalog.load_all/find_well/find_site` and `db.count_distinct_timestamps/latest_reading_timestamp` added to support them. `serve_cli.py` (`uv run midcolumbia-serve`). 73 passing tests (up from 58) — 15 new, all against the real Carlson data via `TestClient`, plus a real running-server smoke test. One real bug caught before it reached the test suite: `/`-containing ids don't work as REST path parameters (Starlette routing, not application logic) — fixed by moving id-based lookups to query parameters, documented in §11.
-- **Phase 4** — Frontend shell: tree + Leaflet map + hover popups, wired to the Phase 3 API.
+- **Phase 4 — done.** `web/` (Vite + TypeScript + Leaflet, no framework): tree pane, map pane, hover tooltips, wired to the Phase 3 API via a dev proxy. Node/npm installed as a new prerequisite. Sites 1–5 given real (user-provided, approximated/spaced) coordinates so the map has something to plot. One real bug found and fixed by actually driving the app in a browser rather than relying on `TestClient`: a SQLite thread-safety issue in `storage/db.py` that only reproduced under genuine concurrent requests (§11). Verified end-to-end with Playwright (installed ad hoc for this, no project skill existed yet) — 5 markers, correct tree, correct hover-tooltip data, clean console.
 - **Phase 5** — Site Management UI: add/edit/delete Project/Reach/Site/Well, backed by new CRUD endpoints.
 - **Phase 6** — Detail data view: design (with user) + implement.
 - **Phase 7** — Polish pass: error-handling audit against CLAUDE.md's "errors must be handled, None must be handled by caller," cleanup, docs.
@@ -377,9 +400,14 @@ Each phase ends with passing tests before moving to the next.
 - No migration framework for the SQLite schema yet (`CREATE TABLE IF NOT EXISTS` only) — fine for now, revisit if the schema needs to change under real ingested data (Phase 2+).
 - `compute_all()` recomputes every non-ATM well's calculations on every run rather than tracking which wells' inputs actually changed (§10) — fine at v1 data scale, revisit if recompute time becomes noticeable.
 - The real Carlson dataset never exercises the `"unknown_no_atm_data"`/`"unknown_atm_gap_too_large"` paths (full ATM coverage) — worth keeping in mind if a future real project has a gap in ATM coverage, since that's the first time the "unknown" UI treatment (Phase 6) will be seen against real data rather than synthetic tests.
-- Iconography for map markers beyond "dots" (Phase 4, per Project Description — deferred by them too).
+- Iconography for map markers beyond "dots" — built as plain `circleMarker` dots in Phase 4 per the original plan; still deferred, per Project Description, whether anything richer (well-type color coding, status indicators) is wanted later.
 - Detail view design (Phase 6, deferred by Project Description).
-- Display units/timezone preference (store UTC + source units internally regardless; decide user-facing default in Phase 4).
+- Display units/timezone preference (store UTC + source units internally regardless; still no user-facing preference UI — not addressed in Phase 4, revisit alongside the detail view in Phase 6 or the Site Management UI in Phase 5).
 - `POST /api/ingest/run` runs synchronously in-request; fine at v1 data scale (a couple seconds for the whole real dataset) but would need to become a background job with polling/websocket status if a much larger dataset ever made a single scan take long enough to risk a request timeout.
 - `GET /api/ingest/status`'s last-run result lives in `app.state` only, not persisted — lost on server restart (§11). Revisit if "what happened on the last ingest" ever needs to survive a restart.
-- CORS is hardcoded to Vite's default local dev origins (`localhost:5173`/`127.0.0.1:5173`) — fine until the frontend's actual dev port is confirmed in Phase 4, or if a non-local deployment is ever considered (out of scope per §9, but worth remembering CORS would need real thought then, not just widening the allowlist).
+- CORS origins (`localhost:5173`/`127.0.0.1:5173`) — confirmed correct now that Phase 4 actually put Vite on its default port; revisit only if a non-local deployment is ever considered (out of scope per §9).
+- `web/src/types.ts` is a hand-kept mirror of `api/schemas.py` — no shared codegen between Python and TypeScript. Fine at this size (a handful of small interfaces); worth automating (e.g. generating TS types from the FastAPI OpenAPI schema) if the API surface grows much further.
+- `map.ts`'s `FALLBACK_CENTER`/`FALLBACK_ZOOM` are hardcoded to the one real reference point we have, used only before any reach has been selected — `project.json5`'s `map.center_lat/center_lon/zoom` field (§7) still isn't wired through the API/frontend; dynamic `fitBounds` on real site coordinates does the actual work. Revisit if a project-level custom default view is ever wanted.
+- Site coordinates for Carlson Creek Restoration are a real reference point but an approximate, evenly-spaced placement for the 5 sites (§7) — not precise per-site GPS. Refine via hand-edit or the Phase 5 UI whenever real per-site coordinates are available.
+- No frontend automated test suite (no Vitest/Playwright test files committed) — Phase 4 was verified with type-checking (`tsc`, `vite build`) plus one ad hoc, not-committed Playwright script driven manually against a running dev server. Per CLAUDE.md's UI-verification guidance this is real "used it in a browser" verification, but it isn't repeatable via `uv run pytest`. Revisit if a `/run-skill-generator`-style committed browser check would pull its weight.
+- The default Vite favicon (a purple Vite logo) is still in place — cosmetic only, not addressed in Phase 4.

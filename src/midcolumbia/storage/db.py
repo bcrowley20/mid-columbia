@@ -54,7 +54,15 @@ CREATE TABLE IF NOT EXISTS calculated_readings (
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: each call to this function still hands out its
+    # own dedicated connection (never shared concurrently between requests),
+    # but FastAPI's sync-dependency threadpool can run a single request's
+    # setup/query/teardown on different worker threads for the same
+    # connection object - sqlite3's default same-thread check rejects that
+    # even though there's no actual concurrent access. Caught by driving the
+    # real app in a browser (concurrent requests), not by pytest's
+    # TestClient, which never exercised this thread-hopping in sequence.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.executescript(_SCHEMA)
     return conn
 
