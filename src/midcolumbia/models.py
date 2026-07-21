@@ -48,6 +48,21 @@ class DeploymentEvent:
     source_file: str
 
 
+@dataclass(frozen=True)
+class CalculatedReading:
+    """A derived value (e.g. water depth), distinct from a raw ingested Reading
+    because it can be explicitly unknown - see the calculations module and
+    Implementation Plan.md section 10.
+    """
+
+    well_id: str
+    timestamp_utc: datetime
+    calculation: str
+    value: float | None  # None when status is not "ok"
+    unit: str
+    status: str  # "ok" | "unknown_no_atm_data" | "unknown_atm_gap_too_large"
+
+
 @dataclass
 class Well:
     id: str

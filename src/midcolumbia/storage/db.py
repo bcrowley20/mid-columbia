@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..models import DeploymentEvent, ParameterType, Reading
+from ..models import CalculatedReading, DeploymentEvent, ParameterType, Reading
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
     mtime REAL NOT NULL,
     size INTEGER NOT NULL
+);
+
+-- Derived values (e.g. water depth) computed by the calculations module.
+-- value is NULL when status is not "ok" - unknown is a first-class result,
+-- not an absent row (Implementation Plan.md section 10).
+CREATE TABLE IF NOT EXISTS calculated_readings (
+    well_id TEXT NOT NULL,
+    calculation TEXT NOT NULL,
+    timestamp_utc TEXT NOT NULL,
+    value REAL,
+    unit TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY (well_id, calculation, timestamp_utc)
 );
 """
 
@@ -93,6 +106,41 @@ def count_deployment_events(conn: sqlite3.Connection, well_id: str | None = None
     if well_id is None:
         return conn.execute("SELECT COUNT(*) FROM deployment_events").fetchone()[0]
     return conn.execute("SELECT COUNT(*) FROM deployment_events WHERE well_id = ?", (well_id,)).fetchone()[0]
+
+
+def upsert_calculated_readings(conn: sqlite3.Connection, results: list[CalculatedReading]) -> None:
+    conn.executemany(
+        "INSERT INTO calculated_readings (well_id, calculation, timestamp_utc, value, unit, status) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(well_id, calculation, timestamp_utc) DO UPDATE SET "
+        "value = excluded.value, unit = excluded.unit, status = excluded.status",
+        [(r.well_id, r.calculation, r.timestamp_utc.isoformat(), r.value, r.unit, r.status) for r in results],
+    )
+
+
+def count_calculated_readings(conn: sqlite3.Connection, well_id: str | None = None) -> int:
+    if well_id is None:
+        return conn.execute("SELECT COUNT(*) FROM calculated_readings").fetchone()[0]
+    return conn.execute("SELECT COUNT(*) FROM calculated_readings WHERE well_id = ?", (well_id,)).fetchone()[0]
+
+
+def fetch_calculated_readings(conn: sqlite3.Connection, well_id: str, calculation: str) -> list[CalculatedReading]:
+    rows = conn.execute(
+        "SELECT well_id, timestamp_utc, calculation, value, unit, status FROM calculated_readings "
+        "WHERE well_id = ? AND calculation = ? ORDER BY timestamp_utc",
+        (well_id, calculation),
+    ).fetchall()
+    return [
+        CalculatedReading(
+            well_id=row[0],
+            timestamp_utc=datetime.fromisoformat(row[1]).replace(tzinfo=timezone.utc),
+            calculation=row[2],
+            value=row[3],
+            unit=row[4],
+            status=row[5],
+        )
+        for row in rows
+    ]
 
 
 def fetch_readings(conn: sqlite3.Connection, well_id: str, parameter: ParameterType) -> list[Reading]:

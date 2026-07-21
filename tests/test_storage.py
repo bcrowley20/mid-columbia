@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from midcolumbia.models import DeploymentEvent, ParameterType, Reading
+from midcolumbia.models import CalculatedReading, DeploymentEvent, ParameterType, Reading
 from midcolumbia.storage import db
 
 
@@ -68,6 +68,49 @@ def test_deployment_events_upsert_and_dedup(tmp_path: Path):
     db.upsert_deployment_events(conn, [event])
     db.upsert_deployment_events(conn, [event])
     assert db.count_deployment_events(conn) == 1
+
+
+def test_calculated_readings_upsert_and_fetch_roundtrips(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.sqlite3")
+    result = CalculatedReading(
+        well_id="w1",
+        timestamp_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        calculation="water_depth",
+        value=1.5,
+        unit="ft",
+        status="ok",
+    )
+    db.upsert_calculated_readings(conn, [result])
+    assert db.fetch_calculated_readings(conn, "w1", "water_depth") == [result]
+    assert db.count_calculated_readings(conn) == 1
+
+
+def test_calculated_readings_null_value_roundtrips(tmp_path: Path):
+    # An "unknown" result has value=None, which must survive a NULL round trip
+    # through SQLite rather than becoming 0 or an error.
+    conn = db.connect(tmp_path / "test.sqlite3")
+    result = CalculatedReading(
+        well_id="w1",
+        timestamp_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        calculation="water_depth",
+        value=None,
+        unit="ft",
+        status="unknown_no_atm_data",
+    )
+    db.upsert_calculated_readings(conn, [result])
+    fetched = db.fetch_calculated_readings(conn, "w1", "water_depth")
+    assert fetched == [result]
+    assert fetched[0].value is None
+
+
+def test_calculated_readings_upsert_is_idempotent(tmp_path: Path):
+    conn = db.connect(tmp_path / "test.sqlite3")
+    result = CalculatedReading(
+        well_id="w1", timestamp_utc=datetime(2026, 1, 1, tzinfo=timezone.utc), calculation="water_depth", value=1.5, unit="ft", status="ok"
+    )
+    db.upsert_calculated_readings(conn, [result])
+    db.upsert_calculated_readings(conn, [result])
+    assert db.count_calculated_readings(conn) == 1
 
 
 def test_file_state_tracking_detects_changes(tmp_path: Path):

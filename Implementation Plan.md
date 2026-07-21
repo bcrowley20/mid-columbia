@@ -1,6 +1,6 @@
 # Mid-Columbia Fisheries Data Analysis — Implementation Plan
 
-Status: draft v6 — **Phases 0–1 complete**; agreed direction for Phases 2–3, later phases sketched and open to revision as we build.
+Status: draft v7 — **Phases 0–2 complete**; agreed direction for Phase 3, later phases sketched and open to revision as we build.
 
 This plan is the working reference for implementation. Update it as decisions change; don't let it drift out of sync with the code.
 
@@ -66,8 +66,9 @@ mid-columbia/
         hoboconnect_xlsx.py      # XLSX handler (IS wells) - Data + Events sheets
         scanner.py               # walks data/ tree, finds new/changed files, upserts
       calculations/
-        base.py                  # Calculation ABC + registry
+        base.py                  # Calculation ABC
         water_depth.py           # ATM + water pressure -> depth (used for both GW and IS wells)
+        runner.py                 # compute_all() - runs every calculation for every non-ATM well
       storage/
         db.py                     # SQLite schema, connection, upsert helpers
       api/
@@ -105,7 +106,8 @@ mid-columbia/
     test_ingestion_hoboconnect_xlsx.py
     test_storage.py
     test_scanner.py             # integration: full scan against real Carlson data, idempotency, handler filtering
-    test_calculations_water_depth.py   # Phase 2
+    test_calculations_water_depth.py   # formula/nearest-neighbor/gap-threshold unit tests
+    test_calculations_runner.py         # integration: compute_all against real Carlson data
     test_api.py                         # Phase 3
 ```
 
@@ -141,6 +143,15 @@ class DeploymentEvent:
     timestamp_utc: datetime
     kind: str                       # normalized: "logger_launched" | "logger_retrieved" | "stopped" | "end_of_file" | ...
     source_file: str
+
+@dataclass(frozen=True)
+class CalculatedReading:            # added in Phase 2 - moved here from the §10 sketch since
+    well_id: str                     # it's a master dataclass on par with Reading/DeploymentEvent
+    timestamp_utc: datetime
+    calculation: str                # e.g. "water_depth"
+    value: float | None              # None when status is not "ok"
+    unit: str                        # "ft" for water_depth
+    status: str                      # "ok" | "unknown_no_atm_data" | "unknown_atm_gap_too_large"
 
 @dataclass
 class Well:
@@ -275,25 +286,34 @@ Still to do in Phase 0/1: write `project.json5` and `site.json5` for this real e
 - **Cloud deployment** (AWS etc.) — explicitly out of scope per Project Description.
 - **Auth / multi-user** — v1 is local-first, single user, no auth.
 
-## 10. Calculations module
+## 10. Calculations module — done (Phase 2)
 
-- Each calculation is a self-contained, named unit (not buried inline) exposing: required input parameter types, output type/unit, and a `compute()` function. Registered similarly to the ingestion handlers.
-- **Water depth — finalized formula and algorithm:**
-  - `depth = (well_pressure - atm_pressure) * 0.334553`, where `well_pressure` is a `WATER_PRESSURE` reading (kPa) from an IS or GW well, `atm_pressure` is an `AIR_PRESSURE` reading (kPa) from that well's paired ATM well, and the result unit is **feet** (0.334553 is the kPa→ft-of-water conversion constant). This applies uniformly to GW and IS wells — vendor-provided pressure/depth values in the source files are never used (see §2, §9), only the raw pressure we ingest ourselves.
-  - For each `WATER_PRESSURE` reading, find the **closest-in-time** `AIR_PRESSURE` reading from the paired ATM well (nearest neighbor by absolute time difference, either before or after — not interpolation between two bracketing points). Compute depth from that pair, **provided the gap is within `settings.calculations.max_atm_gap_hours`** (user-configurable, default **12 hours** — decided and implemented in Phase 0's `config.py`).
-  - **If the paired ATM well has no readings at all to pair with, or the closest one is further away than `max_atm_gap_hours`**, the depth for that timestamp is explicitly marked **unknown** rather than omitted or computed from a too-distant/bad/default value. "Unknown" is a first-class result, not an absence of a result — the UI should be able to show "no depth available for this period" distinctly from "no pressure reading at all," and ideally distinguish "no ATM data at all" from "ATM data exists but too far away" for troubleshooting.
-  - Output representation is a distinct type from raw `Reading`s, since it's derived and can carry an unknown state:
-    ```python
-    @dataclass(frozen=True)
-    class CalculatedReading:
-        well_id: str
-        timestamp_utc: datetime
-        calculation: str            # e.g. "water_depth"
-        value: float | None         # None when unknown
-        unit: str                   # "ft" for water_depth
-        status: str                 # "ok" | "unknown_no_atm_data" | "unknown_atm_gap_too_large"
-    ```
-- Results are stored (not recomputed on every request) but must be invalidated/recomputed when their input readings change (e.g., new data ingested for that well or its paired ATM well).
+**Abstraction** (`calculations/base.py`), mirroring the ingestion handler pattern:
+
+```python
+class Calculation(ABC):
+    name: str          # stored in calculated_readings.calculation, e.g. "water_depth"
+    output_unit: str    # e.g. "ft"
+
+    @abstractmethod
+    def compute(
+        self, well: Well, catalog: Catalog, conn: sqlite3.Connection, settings: CalculationSettings
+    ) -> list[CalculatedReading]: ...
+```
+
+`catalog` is part of the interface for forward-compatibility (a future calculation might need to look at other wells or project settings) even though `WaterDepthCalculation` doesn't currently use it — `well.paired_atm_well_id` is already resolved to a concrete id by the catalog loader, so the water depth calculation only needs `well` and `conn`. Same "keep the interface uniform, even if one implementation ignores a parameter" choice as the ingestion handlers' `timezone` argument (§6).
+
+**Water depth** (`calculations/water_depth.py`) — formula and algorithm as agreed:
+- `depth = (well_pressure - atm_pressure) * KPA_TO_FEET` (`KPA_TO_FEET = 0.334553`), where `well_pressure` is a `WATER_PRESSURE` reading (kPa) from an IS or GW well, `atm_pressure` is an `AIR_PRESSURE` reading (kPa) from that well's paired ATM well, result in **feet**. Applies uniformly to GW and IS wells — vendor-provided pressure/depth values in the source files are never used (§2, §9), only the raw pressure ingested ourselves.
+- For each `WATER_PRESSURE` reading, finds the **closest-in-time** `AIR_PRESSURE` reading from the paired ATM well via a `bisect`-based nearest-neighbor lookup (O(log n) per reading, not a linear scan — matters once a well has years of hourly data) — either before or after, not interpolation between two bracketing points.
+- If the gap to that nearest reading is within `settings.calculations.max_atm_gap_hours` (12h default, §7): status `"ok"`, `value` set. If the gap exceeds it: status `"unknown_atm_gap_too_large"`, `value=None`. If the paired ATM well (or `well.paired_atm_well_id` itself) has no readings at all: status `"unknown_no_atm_data"`, `value=None`. A well with zero `WATER_PRESSURE` readings produces no rows at all (nothing to compute from) rather than a list of unknowns.
+- `CalculatedReading` now lives in `models.py` (§5) rather than being sketched inline here, since Phase 2 actually uses it as a shared type across `calculations/`, `storage/`, and (later) `api/`.
+
+**Storage**: a fourth SQLite table, `calculated_readings (well_id, calculation, timestamp_utc, value, unit, status)`, `PRIMARY KEY (well_id, calculation, timestamp_utc)`, `value` nullable (an "unknown" row is still a stored row, not an absent one — round-trips a real `NULL`, verified in tests). Same upsert pattern as `readings`/`deployment_events`.
+
+**Runner** (`calculations/runner.py`) — `compute_all(data_root, conn, settings)`: for every project/well `catalog.py` finds (skipping ATM wells, which have no `WATER_PRESSURE` to compute from), runs every registered `Calculation` (currently just `WaterDepthCalculation`) and upserts the results. **v1 simplification, decided in Phase 2**: recomputes *every* non-ATM well on every run rather than tracking which wells' input readings actually changed since the last computation. At this data scale (thousands of rows per well) a full recompute is fast and the upsert makes it idempotent/safe; a targeted "only recompute wells whose readings changed this scan" optimization is deferred (§15) rather than built speculatively.
+
+`ingest_cli.py` now chains ingestion and calculation: `uv run midcolumbia-ingest` runs `scan_all()` then `compute_all()` and prints both summaries. Run against the real Carlson data: **11 wells processed, 13,990 `"ok"` results, 0 `"unknown"`** (the sample ATM well fully covers the same hourly date range as every water well, so nothing falls outside the 12-hour gap tolerance in this dataset — the `"unknown"` paths are covered by unit tests with synthetic data instead, see §13).
 
 ## 11. API surface (Phase 3, sketch)
 
@@ -317,13 +337,14 @@ Still to do in Phase 0/1: write `project.json5` and `site.json5` for this real e
 - Use the real Carlson files (already in `data/`) as fixtures for both handlers — they already exercise: variable CSV columns, marker rows in both vocabularies, DST-crossing timestamps in both the fixed-offset (CSV) and DST-aware (XLSX) forms, BOM encoding, incremental (CSV) vs. cumulative-redump (XLSX) download patterns, and multiple wells per site.
 - Explicit test case: the XLSX spring-forward gap (`2026-03-08 01:00` → `2026-03-08 03:00` local) must convert to UTC correctly and not silently produce a bad/missing hour.
 - Integration test: scan a small fixture tree end-to-end into a throwaway SQLite DB and assert reading counts / no duplicates on a re-run (idempotency check) — this matters especially for the XLSX cumulative-redump behavior.
+- Water depth calculation: unit tests against synthetic readings (not the real dataset, which never actually exercises the "unknown" paths) for the formula constant, nearest-neighbor selection among multiple ATM readings, the `max_atm_gap_hours` boundary exactly and one minute past it, no-ATM-data, and no-paired-ATM-well. Plus an integration test running `compute_all()` against the real Carlson data end-to-end and checking recompute idempotency.
 - `uv run pytest` must pass before any phase is considered done, per CLAUDE.md.
 
 ## 14. Phased milestones
 
 - **Phase 0 — done.** `uv init --package` scaffolding (`midcolumbia` package under `src/`, Python ≥3.13, `json5` + `pytest` deps); `models.py` with the §5 dataclasses; `settings.json` + `config.py` loader (raises `SettingsError` on missing/invalid config rather than silently defaulting); `project.json5`/`site.json5` written and validated for the real Carlson Creek Restoration example (§7); `.gitignore`; 13 passing tests (`uv run pytest`) covering the dataclasses, the settings loader (including error paths), and that the JSON5 files agree with the actual folder layout and file types on disk. Deliberately **not** built yet: the JSON5-to-dataclass catalog loader and the ingestion handlers themselves — those belong to Phase 1, next.
 - **Phase 1 — done.** `catalog.py` (JSON5 → dataclasses, id scheme, flat well lookup); `ingestion/base.py` (`LoggerHandler` ABC, `ParseError`) and both handlers (`hoboware_csv.py`, `hoboconnect_xlsx.py` — the latter revised after inspecting the real workbook structure, see §2/§6); `ingestion/scanner.py` (incremental rescan, per-file error isolation, handler filtering by `settings.enabled_device_handlers`); `storage/db.py` (SQLite schema + upserts); `ingest_cli.py` (`uv run midcolumbia-ingest`). 43 passing tests, including an integration test that runs a full scan against the real Carlson data and checks idempotency on rescan. One real bug was caught and fixed while writing tests: the CSV handler was dropping the first reading of every well because it skipped the whole row whenever a deployment marker fired, even though a launch-row can carry a marker *and* a valid reading (§2).
-- **Phase 2** — Calculations module (water depth), tested.
+- **Phase 2 — done.** `models.CalculatedReading`; `calculations/base.py` (`Calculation` ABC); `calculations/water_depth.py` (formula, `bisect`-based nearest-neighbor ATM pairing, gap-threshold and no-data unknown states); `calculations/runner.py` (`compute_all()`, full-recompute-every-run simplification); a fourth SQLite table (`calculated_readings`, nullable `value`); `ingest_cli.py` now runs calculations right after ingestion. 58 passing tests (up from 43) — 15 new, covering the formula, nearest-neighbor/gap-threshold edge cases with synthetic data, NULL round-tripping, and an integration run against the real Carlson data (11 wells, 13,990 `"ok"` results, 0 `"unknown"`).
 - **Phase 3** — FastAPI backend: read endpoints for tree/map/detail data, ingest trigger.
 - **Phase 4** — Frontend shell: tree + Leaflet map + hover popups, wired to the Phase 3 API.
 - **Phase 5** — Site Management UI: add/edit/delete Project/Reach/Site/Well, backed by new CRUD endpoints.
@@ -337,6 +358,8 @@ Each phase ends with passing tests before moving to the next.
 - Where the XLSX-conversion IANA timezone lives if it ever needs to vary per-well rather than per-project (starting assumption, still in place: one timezone per project, in `project.json5`, implemented as `Catalog.timezone` in Phase 1).
 - Whether `Button Up`/`Button Down` events (XLSX) are worth surfacing in the UI as site-visit markers — captured and stored since Phase 1, decision on UI treatment deferred to Phase 6.
 - No migration framework for the SQLite schema yet (`CREATE TABLE IF NOT EXISTS` only) — fine for now, revisit if the schema needs to change under real ingested data (Phase 2+).
+- `compute_all()` recomputes every non-ATM well's calculations on every run rather than tracking which wells' inputs actually changed (§10) — fine at v1 data scale, revisit if recompute time becomes noticeable.
+- The real Carlson dataset never exercises the `"unknown_no_atm_data"`/`"unknown_atm_gap_too_large"` paths (full ATM coverage) — worth keeping in mind if a future real project has a gap in ATM coverage, since that's the first time the "unknown" UI treatment (Phase 6) will be seen against real data rather than synthetic tests.
 - Iconography for map markers beyond "dots" (Phase 4, per Project Description — deferred by them too).
 - Detail view design (Phase 6, deferred by Project Description).
 - Display units/timezone preference (store UTC + source units internally regardless; decide user-facing default in Phase 4).
