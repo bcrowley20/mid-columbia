@@ -1,6 +1,6 @@
 # Mid-Columbia Fisheries Data Analysis — Implementation Plan
 
-Status: draft v5 — **Phase 0 complete**; agreed direction for Phases 1–3, later phases sketched and open to revision as we build.
+Status: draft v6 — **Phases 0–1 complete**; agreed direction for Phases 2–3, later phases sketched and open to revision as we build.
 
 This plan is the working reference for implementation. Update it as decisions change; don't let it drift out of sync with the code.
 
@@ -21,17 +21,21 @@ The sample set at `data/Carlson Creek Restoration/Lower Stream/` (5 sites, each 
 ### CSV (HOBOware desktop export) — used by all GW wells and the ATM well
 - **Sequential downloads are contiguous, not overlapping.** A logger's second download picks up right at the "Coupler Attached" event that ends the first download's file.
 - **Columns vary between downloads of the same logger.** Some exports include `Coupler Detached`, `Coupler Attached`, `Stopped`, `End Of File` marker columns; others only have `#, Date Time, Abs Pres, Temp`. Match by header name, not column position.
-- **Marker rows carry no sensor reading** (`Coupler Detached`/`Coupler Attached`/`Stopped`/`End Of File` with blank Abs Pres/Temp) — these are deployment/download boundary events, not readings.
+- **Marker rows *usually* carry no sensor reading, but not always** — `Coupler Attached`/`Stopped`/`End Of File` rows (retrieval-side) are reliably blank, but the `Coupler Detached` (launch) row can carry a real reading on the same row as the marker (verified: Site 1 GW well's very first row is both `Coupler Detached=Logged` *and* a valid Abs Pres/Temp reading). **Caught as a bug while writing Phase 1 tests**: an earlier version of the handler skipped reading emission for any row with a marker, silently dropping every well's first data point. Fixed — event and reading emission are independent, driven by whether each field is actually blank, not by whether a marker fired on that row.
 - **The stated UTC offset is fixed per file, not DST-aware.** Headers read `"Date Time, GMT-08:00"`. Verified: a file spanning the March 8 spring-forward has continuous hourly timestamps with no gap — the logger/export never adjusts for DST, it just stamps everything with whatever fixed offset was configured at deployment. The parser must apply that literal offset to every row in the file.
 - UTF-8 BOM at the start of the file (`utf-8-sig` codec). Column headers embed the logger's serial number (e.g. `"Abs Pres, kPa (LGR S/N: 22332695, ...)"`) — match by prefix (`"Abs Pres"`, `"Temp"`, `"Date Time"`), not exact string.
 
 ### XLSX (HOBOconnect app export, MX20L loggers) — used by all IS wells
 - **Each download is a full cumulative history dump from deployment start, not an incremental delta.** Verified directly: the second download for Site 1's IS well starts at row 2 with `2026-02-26 11:00:00` — the original deployment start — not where the first download left off. Every later download re-includes every earlier reading. This makes upsert-by-`(well_id, timestamp, parameter)` a **required** part of ingestion, not just a defensive nicety — the XLSX handler will "reparse and overwrite" every time a well gets a new download, while the CSV handler mostly just appends.
-- **Timestamps are true local wall-clock time with real DST transitions**, not a fixed offset. Verified directly by decoding the Excel serial dates: the same file has a row at `2026-03-08 01:00:00` followed immediately by a row at `2026-03-08 03:00:00` — a genuine spring-forward gap (2 AM skipped), which only happens with DST-aware local time. Converting to UTC requires the actual IANA timezone (e.g. `America/Los_Angeles`) via `zoneinfo`, not a per-file fixed offset like the CSV format. The header/filename's `PST`/`PDT` label is just a hint of which zone, not the offset to use for the whole file. Need an explicit decision for the ambiguous repeated hour at fall-back (see §15).
-- Dates are stored as Excel serial numbers (days since 1899-12-30), not text — needs `openpyxl` (or manual XML parsing) rather than a CSV-style text parser.
-- It's a multi-sheet workbook: a data sheet plus metadata sheets (device info, deployment settings, app info). Only the data sheet is relevant to ingestion.
-- **The data sheet already includes an `ATM, kPa` column and pre-computed `depth_m`/`depth_ft` columns** — this device format does its own barometric compensation, using some ATM source we don't control or know the provenance of. **Decision: v1 ignores these columns.** We extract only `Absolute Pressure` → `WATER_PRESSURE` and `Temperature` → `WATER_TEMPERATURE` from XLSX (matching what the CSV handler extracts from GW/ATM wells), and always compute depth ourselves in the Calculations module using the reach's actual ATM well. Rationale: consistency across well types (GW wells have no vendor depth to fall back on), and not wanting to depend on an unverified vendor computation. This can be revisited later as a cross-validation check, not a blocker now.
-- Event/marker columns use different vocabulary than CSV: `Host Connected`, `Started`, `Button Up`, `Button Down`, `End of File`, `Logged` (vs. CSV's `Coupler Detached`/`Attached`, `Stopped`, `End Of File`). Both map into the same `DeploymentEvent.kind` field but need per-handler normalization (see §6).
+- **Timestamps are true local wall-clock time with real DST transitions**, not a fixed offset. Verified directly by decoding the Excel serial dates: the same file has a row at `2026-03-08 01:00:00` followed immediately by a row at `2026-03-08 03:00:00` — a genuine spring-forward gap (2 AM skipped), which only happens with DST-aware local time. Converting to UTC requires the actual IANA timezone (e.g. `America/Los_Angeles`) via `zoneinfo`, not a per-file fixed offset like the CSV format. The header/filename's `PST`/`PDT` label is just a hint of which zone, not the offset to use for the whole file. **Decided in Phase 1**: for the ambiguous repeated local hour at fall-back, use `fold=0` (the earlier of the two moments) — implemented and unit-tested in `ingestion/hoboconnect_xlsx.py`.
+- Dates are stored as Excel serial numbers (days since 1899-12-30) — but in practice **openpyxl auto-converts date-formatted cells to native `datetime` objects** on load (the cell's style carries a date number format), so the handler doesn't need to do the serial-number math itself in the common case; it only falls back to manual decoding if a cell ever comes back as a plain float.
+- **Corrected in Phase 1** (the original assumption below was wrong): it's a **3-sheet** workbook, always named **"Data"**, **"Events"**, **"Details"** (verified identical across every sample file) — not "a data sheet plus metadata sheets" with the data sheet position undetermined. This actually resolves the "reliably first sheet" open item from Phase 0: the handler looks sheets up **by name** (`workbook["Data"]`, `workbook["Events"]`), not by position, so sheet order doesn't matter.
+  - **"Data"** sheet: `#`, `Date-Time`, `Absolute Pressure`, `Temperature`, plus vendor `ATM, kPa` / `depth_m` / `depth_ft` columns (see below) — one row per hourly reading, no event/marker columns at all.
+  - **"Events"** sheet: a **separate table**, own row numbering, with columns `#`, `Date-Time`, `Host Connected`, `End of File`, `Started`, `Button Up`, `Button Down` — the marker-column convention (a `"Logged"` value in the relevant column) is the same idea as the CSV format's marker columns, just on its own sheet instead of inline with the data rows as originally assumed in the draft plan.
+  - **"Details"** sheet: device/deployment key-value metadata (product model, firmware, deployment settings). Out of scope for ingestion, as originally planned.
+- **The Data sheet's `ATM, kPa` column is often simply empty** (no cell at all, not even a zero) — verified directly: in the first Site 1 IS-well download, column E (`ATM`) has no value on any row, yet the `depth_m` formula (`=(C-E)/9.81`) still references it, meaning Excel silently treats the missing ATM value as 0 and the resulting "depth" is not actually barometrically compensated. This further confirms (beyond the reasoning already in the original plan) that the vendor depth/ATM columns aren't reliable and should not be used — reinforces, rather than changes, the existing decision below.
+- **Decision: v1 ignores the vendor `ATM`/`depth_m`/`depth_ft` columns.** We extract only `Absolute Pressure` → `WATER_PRESSURE` and `Temperature` → `WATER_TEMPERATURE` from the Data sheet (matching what the CSV handler extracts from GW/ATM wells), and always compute depth ourselves in the Calculations module using the reach's actual ATM well. Rationale: consistency across well types (GW wells have no vendor depth to fall back on), and not wanting to depend on an unverified — and, per the finding above, sometimes literally empty — vendor computation.
+- Event/marker vocabulary on the Events sheet: `Host Connected`, `Started`, `Button Up`, `Button Down`, `End of File`, with `"Logged"` as the marker value (vs. CSV's `Coupler Detached`/`Attached`, `Stopped`, `End Of File`). Both map into the same `DeploymentEvent.kind` field but need per-handler normalization (see §6). `Button Up`/`Button Down` are real, frequent events (a field technician's button presses during retrieval) — captured as their own kinds, not dropped.
 
 ## 3. Tech stack
 
@@ -52,11 +56,15 @@ mid-columbia/
   src/
     midcolumbia/
       models.py                # master dataclasses: Reading, DeploymentEvent, Well, Site, Reach, Project
+      catalog.py                # project.json5/site.json5 -> dataclasses (id scheme, folder resolution)
+      config.py                  # settings.json loading
+      ingest_cli.py               # `uv run midcolumbia-ingest` - runs a full scan, prints a summary
       ingestion/
-        base.py                 # LoggerHandler abstract base class + registry
+        base.py                 # LoggerHandler ABC + ParseError
+        _util.py                 # shared header/unit-parsing helpers
         hoboware_csv.py          # CSV handler (GW + ATM wells)
-        hoboconnect_xlsx.py      # XLSX handler (IS wells)
-        scanner.py               # walks data/ tree, finds new/changed files
+        hoboconnect_xlsx.py      # XLSX handler (IS wells) - Data + Events sheets
+        scanner.py               # walks data/ tree, finds new/changed files, upserts
       calculations/
         base.py                  # Calculation ABC + registry
         water_depth.py           # ATM + water pressure -> depth (used for both GW and IS wells)
@@ -68,7 +76,6 @@ mid-columbia/
         routes_wells.py
         routes_readings.py
         routes_ingest.py
-      config.py                  # settings.json loading
   web/
     (Vite project: index.html, src/, package.json)
   data/
@@ -89,12 +96,17 @@ mid-columbia/
           IS 3/
         ...
   tests/
-    fixtures/                  # symlink or copy of representative sample CSV/XLSX files
+    conftest.py                # repo_root/data_root fixtures - tests read the real data/ tree directly, no fixtures/ copy needed
+    test_models.py
+    test_config.py
+    test_sample_data.py         # validates project.json5/site.json5 against the real folder layout
+    test_catalog.py
     test_ingestion_hoboware_csv.py
     test_ingestion_hoboconnect_xlsx.py
-    test_calculations_water_depth.py
     test_storage.py
-    test_api.py
+    test_scanner.py             # integration: full scan against real Carlson data, idempotency, handler filtering
+    test_calculations_water_depth.py   # Phase 2
+    test_api.py                         # Phase 3
 ```
 
 ## 5. Data model (master dataclasses)
@@ -171,38 +183,50 @@ Notes:
 
 ## 6. Ingestion module
 
-**Handler abstraction** (`ingestion/base.py`):
+**Handler abstraction** (`ingestion/base.py`) — implemented with one addition over the original sketch: `parse()` also takes `well_id`, since it's the handler's job to stamp the correct id onto every `Reading`/`DeploymentEvent` it produces (both are frozen dataclasses, so this can't be patched on after the fact):
 
 ```python
 class LoggerHandler(ABC):
+    name: str  # matches an entry in settings.json's enabled_device_handlers
+
     @abstractmethod
     def can_handle(self, path: Path) -> bool: ...
 
     @abstractmethod
-    def parse(self, path: Path, well_type: WellType) -> tuple[list[Reading], list[DeploymentEvent]]: ...
+    def parse(
+        self, path: Path, well_id: str, well_type: WellType, timezone: str
+    ) -> tuple[list[Reading], list[DeploymentEvent]]: ...
 ```
 
-A registry (list of handlers, tried in order) lets us add new device types later without touching the scanner or storage layer.
+`timezone` is always passed (an IANA zone name from the project's `Catalog`) even though the CSV handler ignores it — keeps the interface uniform across handlers rather than special-casing one of them. A `ParseError` exception (also in `base.py`) is raised on malformed input; the scanner catches it per-file so one bad file doesn't abort a whole scan (see below).
 
 **CSV handler** (`ingestion/hoboware_csv.py`) — HOBOware desktop export, used by GW and ATM wells:
-- Skip the `"Plot Title: ..."` line; read with `encoding="utf-8-sig"`.
-- Parse the header row; match `Date Time` (extract the `GMT±HH:MM` offset from the column name), `Abs Pres`, `Temp`, and marker columns, by prefix match.
-- For data rows with `Abs Pres`/`Temp` present: emit `Reading`s — pressure as `AIR_PRESSURE`/`WATER_PRESSURE` and temp as `AIR_TEMPERATURE`/`WATER_TEMPERATURE`, chosen by the well's `WellType` (`ATMOSPHERIC` → air, `GROUNDWATER`/`IN_STREAM` → water).
-- For rows where a marker column reads `"Logged"`, emit a `DeploymentEvent` instead, with `kind` normalized from the column name (`Coupler Detached` → `logger_launched`, `Coupler Attached` → `logger_retrieved`, `Stopped` → `stopped`, `End Of File` → `end_of_file`).
+- Skip the `"Plot Title: ..."` line; read with `encoding="utf-8-sig"`, via the stdlib `csv` module (handles the quoted, comma-containing header fields correctly).
+- Parse the header row; match `Date Time` (extract the `GMT±HH:MM` offset from the column name), `Abs Pres`, `Temp`, and marker columns, by prefix match. Units are parsed out of the header text itself (e.g. `"Abs Pres, kPa (...)"` → `"kPa"`), not hard-coded — `°C` is normalized to `"degC"`.
+- Emit `Reading`s for rows with `Abs Pres`/`Temp` present: pressure as `AIR_PRESSURE`/`WATER_PRESSURE` and temp as `AIR_TEMPERATURE`/`WATER_TEMPERATURE`, chosen by the well's `WellType` (`ATMOSPHERIC` → air, `GROUNDWATER`/`IN_STREAM` → water).
+- Independently, for rows where a marker column reads `"Logged"`, emit a `DeploymentEvent`, with `kind` normalized from the column name (`Coupler Detached` → `logger_launched`, `Coupler Attached` → `logger_retrieved`, `Stopped` → `stopped`, `End Of File` → `end_of_file`). Event and reading emission are independent per row (see §2's launch-row finding) — a row can produce both.
 - Apply the file's fixed UTC offset (parsed from the header) to every row — never recompute via calendar DST rules.
 
-**XLSX handler** (`ingestion/hoboconnect_xlsx.py`) — HOBOconnect app export, used by IS wells:
-- Open with `openpyxl` (read-only mode), locate the data sheet (first sheet in the samples seen so far — confirm this holds generally once we have more real files, don't hard-code by name if avoidable).
-- Match `Absolute Pressure` → `WATER_PRESSURE`, `Temperature` → `WATER_TEMPERATURE`, by header prefix. Explicitly skip `ATM, kPa`, `depth_m`, `depth_ft` columns (see §2 rationale).
-- Convert each row's Excel serial date to a naive local datetime, then localize using the project/reach's configured IANA timezone (see §7) via `zoneinfo`, then convert to UTC. Do not trust the header's `PST`/`PDT` label as a fixed offset — it's descriptive, not authoritative (see §2).
-- Marker columns (`Host Connected`, `Started`, `Button Up`, `Button Down`, `End of File`) map to `DeploymentEvent`s with normalized `kind` values consistent with the CSV handler's vocabulary where the semantics match (`Started` → `logger_launched`, `Host Connected` → `logger_retrieved`, `End of File` → `end_of_file`); `Button Up`/`Button Down` are recorded as their own `kind` (likely a field technician's manual site-visit marker) rather than dropped, pending a decision on whether they're useful to surface in the UI.
+**XLSX handler** (`ingestion/hoboconnect_xlsx.py`) — HOBOconnect app export, used by IS wells. Revised from the original sketch after inspecting the real workbook structure (see §2):
+- Open with `openpyxl` (`read_only=True, data_only=True`). Look up the **`"Data"`** and **`"Events"`** sheets **by name** (verified stable across every sample file — resolves the "reliably first sheet" open item from Phase 0).
+- **Data sheet**: match `Absolute Pressure` → `WATER_PRESSURE`, `Temperature` → `WATER_TEMPERATURE`, by header prefix; unit parsed from the header the same way as the CSV handler (shared helper in `ingestion/_util.py`). Explicitly skip the vendor `ATM, kPa`, `depth_m`, `depth_ft` columns (see §2 rationale — the ATM column is sometimes entirely empty).
+- **Events sheet**: separate table, own `#`/`Date-Time` columns, with marker columns `Host Connected` → `logger_retrieved`, `Started` → `logger_launched`, `End of File` → `end_of_file`, `Button Up` → `button_up`, `Button Down` → `button_down` (a `"Logged"` cell value marks occurrence, same convention as CSV's marker columns).
+- Timestamp handling: openpyxl auto-converts date-formatted cells to naive `datetime` objects (falls back to manual Excel-serial decoding — days since 1899-12-30 — if a cell ever comes back as a plain float instead). The naive local datetime is localized with the project's IANA timezone (§7) via `zoneinfo`, then converted to UTC. Do not trust the header's `PST`/`PDT` label as a fixed offset — it's descriptive, not authoritative (see §2). **Decided**: ambiguous fall-back-DST local times use `fold=0` (the earlier of the two moments).
 - Because every download is a full cumulative re-dump (§2), this handler will typically produce readings that mostly already exist — rely on the storage layer's upsert-by-`(well_id, timestamp, parameter)` to make this a no-op for unchanged rows rather than trying to diff/skip in the handler itself.
 
 **Scanner** (`ingestion/scanner.py`):
-- Walks `data/<Project>/<Reach>/{<ATM well folder>, <Site>/<Well folder>}/*` using the well list from `site.json5`/the project registry (not by guessing structure from folder names).
-- Dispatches each file to the first handler whose `can_handle()` matches (by extension at minimum; `.hobo` matches no handler and is ignored).
-- Compares mtime + size (or hash, for robustness) against what's recorded in SQLite; only parses new/changed files.
-- Feeds parsed `Reading`/`DeploymentEvent` lists to the storage layer's upsert.
+- For each project `discover_project_folders()` finds under `data_root`, loads its `Catalog` (via `catalog.py`) and iterates every well in `catalog.wells` (including the reach-level ATM well) — folder structure is walked once, by the catalog loader, not re-derived here.
+- For each file directly inside a well's folder, dispatches to the first handler (from `DEFAULT_HANDLERS`, filtered down to `settings.enabled_device_handlers`) whose `can_handle()` matches; `.hobo` and anything else unrecognized is silently skipped, not an error.
+- Compares mtime + size against what's recorded in the `ingested_files` SQLite table; skips files that haven't changed.
+- On a `ParseError`, records the error in the returned `ScanResult.errors` and moves on to the next file — the bad file is **not** marked as ingested, so it's retried on the next scan rather than silently accepted or silently dropped forever.
+- On success, upserts the parsed `Reading`/`DeploymentEvent` lists, records the file's new mtime/size, and commits — per file, so an interrupted scan leaves already-processed files durably recorded rather than losing all progress.
+
+**Storage** (`storage/db.py`) — three SQLite tables, created with `CREATE TABLE IF NOT EXISTS` on connect (no migration framework yet — fine for a single-developer v1, revisit if the schema needs to evolve under real user data):
+- `readings (well_id, parameter, timestamp_utc, value, unit, source_file, source_row)`, `PRIMARY KEY (well_id, parameter, timestamp_utc)` — this is the upsert key discussed throughout §2/§6.
+- `deployment_events (well_id, timestamp_utc, kind, source_file)`, `PRIMARY KEY (well_id, timestamp_utc, kind)`.
+- `ingested_files (path, mtime, size)` — what the scanner's unchanged-file check reads/writes.
+
+A small CLI (`ingest_cli.py`, registered as the `midcolumbia-ingest` script) runs `scan_all()` against `settings.json`'s configuration and prints a summary — useful for manually verifying ingestion against real data outside of pytest, ahead of Phase 3's API-triggered ingest. Run against the real Carlson data during Phase 1 development: **36 files, 30,824 parsed readings, 208 parsed deployment events, 0 errors** (stored counts are lower after upsert dedup, since XLSX downloads are cumulative re-dumps — see §2).
 
 ## 7. Configuration
 
@@ -235,7 +259,7 @@ Every folder-backed entity carries an explicit `folder` field distinct from its 
 
 The Site Management UI (Phase 5) is what writes `project.json5`/`site.json5` and creates the corresponding folders — users should not need to hand-edit these files, though they can (JSON5 comments are there specifically so hand-editing stays reasonable).
 
-Turning these files into the §5 dataclasses (resolving `folder` references into full paths, deriving `id`s, resolving `paired_atm_well` names into ids) is a **Phase 1** job, done by the ingestion scanner's catalog-loading step — Phase 0 only needed the files to exist and be valid, which is what `tests/test_sample_data.py` checks.
+Turning these files into the §5 dataclasses is **done, in Phase 1** — `catalog.py`'s `load_catalog(data_root, project_folder)` reads `project.json5` and every `Site N/site.json5` beneath it, resolves `folder` references into real paths, derives ids as `/`-joined slugs of each entity's path relative to `data_root` (e.g. `carlson-creek-restoration/lower-stream/site-1/gw-1`, matching the scheme decided in Phase 0), and resolves each well's `paired_atm_well` (or the `null` default) into a concrete ATM well id. It returns a small `Catalog` aggregate — `Catalog(project, wells, timezone)` — not just a bare `Project`: `wells` is a flat `{id: Well}` map covering *every* well including reach-level ATM wells (which `Project`/`Site` alone can't reach, since `Reach` only stores `atm_well_id` as a string), and `timezone` carries the project's IANA zone since it's config, not part of the `Project` identity dataclass in `models.py`. The scanner and, later, the calculations module both need this flat lookup. `CatalogError` is raised (not a bare `KeyError`/`ValueError`) for a missing file, invalid JSON5, a `folder` that doesn't exist on disk, or a `paired_atm_well` that doesn't resolve.
 
 ## 8. Data reorganization — done
 
@@ -298,7 +322,7 @@ Still to do in Phase 0/1: write `project.json5` and `site.json5` for this real e
 ## 14. Phased milestones
 
 - **Phase 0 — done.** `uv init --package` scaffolding (`midcolumbia` package under `src/`, Python ≥3.13, `json5` + `pytest` deps); `models.py` with the §5 dataclasses; `settings.json` + `config.py` loader (raises `SettingsError` on missing/invalid config rather than silently defaulting); `project.json5`/`site.json5` written and validated for the real Carlson Creek Restoration example (§7); `.gitignore`; 13 passing tests (`uv run pytest`) covering the dataclasses, the settings loader (including error paths), and that the JSON5 files agree with the actual folder layout and file types on disk. Deliberately **not** built yet: the JSON5-to-dataclass catalog loader and the ingestion handlers themselves — those belong to Phase 1, next.
-- **Phase 1** — Ingestion pipeline (CSV + XLSX handlers) + a catalog loader (`project.json5`/`site.json5` → §5 dataclasses, resolving `folder`/`paired_atm_well` references into ids) + SQLite storage, tested against the real Carlson sample data.
+- **Phase 1 — done.** `catalog.py` (JSON5 → dataclasses, id scheme, flat well lookup); `ingestion/base.py` (`LoggerHandler` ABC, `ParseError`) and both handlers (`hoboware_csv.py`, `hoboconnect_xlsx.py` — the latter revised after inspecting the real workbook structure, see §2/§6); `ingestion/scanner.py` (incremental rescan, per-file error isolation, handler filtering by `settings.enabled_device_handlers`); `storage/db.py` (SQLite schema + upserts); `ingest_cli.py` (`uv run midcolumbia-ingest`). 43 passing tests, including an integration test that runs a full scan against the real Carlson data and checks idempotency on rescan. One real bug was caught and fixed while writing tests: the CSV handler was dropping the first reading of every well because it skipped the whole row whenever a deployment marker fired, even though a launch-row can carry a marker *and* a valid reading (§2).
 - **Phase 2** — Calculations module (water depth), tested.
 - **Phase 3** — FastAPI backend: read endpoints for tree/map/detail data, ingest trigger.
 - **Phase 4** — Frontend shell: tree + Leaflet map + hover popups, wired to the Phase 3 API.
@@ -310,10 +334,9 @@ Each phase ends with passing tests before moving to the next.
 
 ## 15. Open items to revisit
 
-- Where the XLSX-conversion IANA timezone lives if it ever needs to vary per-well rather than per-project (Phase 0/1 — starting assumption is one timezone per project, in `project.json5`).
-- How to handle the DST fall-back ambiguous hour (the repeated 1–2 AM local hour) for XLSX timestamp conversion — needs an explicit, documented rule (e.g. assume the first occurrence / standard time) rather than leaving it to `zoneinfo` defaults unexamined (Phase 1).
-- Whether `Button Up`/`Button Down` events (XLSX) are worth surfacing in the UI as site-visit markers (Phase 1/6).
-- Whether the XLSX data sheet is reliably always the first sheet, once we see files from more devices/exports (Phase 1).
+- Where the XLSX-conversion IANA timezone lives if it ever needs to vary per-well rather than per-project (starting assumption, still in place: one timezone per project, in `project.json5`, implemented as `Catalog.timezone` in Phase 1).
+- Whether `Button Up`/`Button Down` events (XLSX) are worth surfacing in the UI as site-visit markers — captured and stored since Phase 1, decision on UI treatment deferred to Phase 6.
+- No migration framework for the SQLite schema yet (`CREATE TABLE IF NOT EXISTS` only) — fine for now, revisit if the schema needs to change under real ingested data (Phase 2+).
 - Iconography for map markers beyond "dots" (Phase 4, per Project Description — deferred by them too).
 - Detail view design (Phase 6, deferred by Project Description).
 - Display units/timezone preference (store UTC + source units internally regardless; decide user-facing default in Phase 4).

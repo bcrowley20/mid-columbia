@@ -9,7 +9,12 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "json5>=0.9.25",
+    "openpyxl>=3.1.5",
+    "tzdata>=2026.3",
 ]
+
+[project.scripts]
+midcolumbia-ingest = "midcolumbia.ingest_cli:main"
 
 [dependency-groups]
 dev = [

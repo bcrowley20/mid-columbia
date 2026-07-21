@@ -13,3 +13,11 @@ def repo_root() -> Path:
 @pytest.fixture
 def data_root() -> Path:
     return REPO_ROOT / "data"
+
+
+@pytest.fixture
+def carlson_root(data_root: Path) -> Path:
+    return data_root / "Carlson Creek Restoration"
+
+
+PROJECT_TIMEZONE = "America/Los_Angeles"
