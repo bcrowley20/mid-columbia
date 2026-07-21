@@ -3,12 +3,13 @@ import type { ProjectOut, ReachOut, SiteOut, WellOut } from "./types";
 
 // Renders the Project > Reach > Site > Well tree (Implementation Plan.md
 // section 12) plus the Phase 5 add/edit/delete controls at every level.
-// Clicking a Reach re-centers the map (Phase 4). Sites/Wells aren't
-// clickable for selection yet - that's the Phase 6 detail view.
+// Clicking a Reach re-centers the map (Phase 4). Clicking a Site opens the
+// Phase 6 chart panel.
 export function renderTree(
   container: HTMLElement,
   projects: ProjectOut[],
   onSelectReach: (reach: ReachOut) => void,
+  onSelectSite: (reach: ReachOut, site: SiteOut) => void,
   onDataChanged: () => void,
 ): void {
   container.innerHTML = "";
@@ -16,7 +17,7 @@ export function renderTree(
   root.className = "tree";
 
   for (const project of projects) {
-    root.appendChild(renderProjectNode(project, container, onSelectReach, onDataChanged));
+    root.appendChild(renderProjectNode(project, container, onSelectReach, onSelectSite, onDataChanged));
   }
 
   container.appendChild(root);
@@ -57,6 +58,7 @@ function renderProjectNode(
   project: ProjectOut,
   treeRoot: HTMLElement,
   onSelectReach: (reach: ReachOut) => void,
+  onSelectSite: (reach: ReachOut, site: SiteOut) => void,
   onDataChanged: () => void,
 ): HTMLElement {
   const { item, actions } = renderRow(project.name, "tree-label-project");
@@ -71,7 +73,7 @@ function renderProjectNode(
 
   const reachList = document.createElement("ul");
   for (const reach of project.reaches) {
-    reachList.appendChild(renderReachNode(reach, treeRoot, onSelectReach, onDataChanged));
+    reachList.appendChild(renderReachNode(reach, treeRoot, onSelectReach, onSelectSite, onDataChanged));
   }
   item.appendChild(reachList);
 
@@ -82,6 +84,7 @@ function renderReachNode(
   reach: ReachOut,
   treeRoot: HTMLElement,
   onSelectReach: (reach: ReachOut) => void,
+  onSelectSite: (reach: ReachOut, site: SiteOut) => void,
   onDataChanged: () => void,
 ): HTMLElement {
   const { item, label, actions } = renderRow(reach.name, "tree-label-reach");
@@ -111,15 +114,30 @@ function renderReachNode(
 
   const siteList = document.createElement("ul");
   for (const site of reach.sites) {
-    siteList.appendChild(renderSiteNode(site, onDataChanged));
+    siteList.appendChild(renderSiteNode(reach, site, onSelectSite, onDataChanged));
   }
   item.appendChild(siteList);
 
   return item;
 }
 
-function renderSiteNode(site: SiteOut, onDataChanged: () => void): HTMLElement {
-  const { item, actions } = renderRow(site.name, "tree-label-site");
+function renderSiteNode(
+  reach: ReachOut,
+  site: SiteOut,
+  onSelectSite: (reach: ReachOut, site: SiteOut) => void,
+  onDataChanged: () => void,
+): HTMLElement {
+  const { item, label, actions } = renderRow(site.name, "tree-label-site");
+  label.tabIndex = 0;
+
+  const select = () => onSelectSite(reach, site);
+  label.addEventListener("click", select);
+  label.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      select();
+    }
+  });
 
   addActionButton(actions, "+ Well", "Add a well to this site", () => mgmt.openCreateWellDialog(site.id, onDataChanged));
   addActionButton(actions, "Edit", "Edit this site", () => mgmt.openEditSiteDialog(site, onDataChanged));

@@ -113,6 +113,98 @@ body {
   inset: 0;
 }
 
+#chart-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 42%;
+  min-height: 260px;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.1);
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+}
+
+#chart-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#chart-panel-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#chart-panel-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+#chart-panel-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#chart-reset-zoom {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+#chart-reset-zoom:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+#chart-panel-close {
+  border: none;
+  background: none;
+  font-size: 1.3rem;
+  line-height: 1;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+#chart-panel-close:hover {
+  color: var(--color-text);
+}
+
+#chart-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0.5rem 0.9rem;
+}
+
+#chart-panel-empty {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  padding: 1rem;
+}
+
 .map-empty-state {
   position: absolute;
   top: 1rem;
@@ -179,6 +271,11 @@ ul.tree {
 .tree-label-site {
   color: var(--color-text-muted);
   font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.tree-label-site:hover {
+  background: var(--color-accent-soft);
 }
 
 .tree-label-well {

@@ -1,18 +1,25 @@
 import "./style.css";
 
 import { fetchProjects } from "./api";
+import { ChartPanel } from "./chart";
 import * as mgmt from "./management";
 import { SiteMap } from "./map";
 import { renderTree } from "./tree";
-import type { ProjectOut, ReachOut } from "./types";
+import type { ProjectOut, ReachOut, SiteOut } from "./types";
 
 let selectedReachId: string | null = null;
 let siteMap: SiteMap;
+let chartPanel: ChartPanel;
+
+function onSelectSite(reach: ReachOut, site: SiteOut): void {
+  chartPanel.open(reach, site).catch((err: unknown) => console.error(err));
+}
 
 async function main(): Promise<void> {
   const mapContainer = document.querySelector<HTMLElement>("#map")!;
   const emptyStateEl = document.querySelector<HTMLElement>("#map-empty-state")!;
-  siteMap = new SiteMap(mapContainer, emptyStateEl);
+  chartPanel = new ChartPanel();
+  siteMap = new SiteMap(mapContainer, emptyStateEl, onSelectSite);
 
   document.querySelector<HTMLButtonElement>("#add-project-button")!.addEventListener("click", () => {
     mgmt.openCreateProjectDialog(refresh);
@@ -34,6 +41,7 @@ async function refresh(): Promise<void> {
         selectedReachId = reach.id;
         siteMap.showReach(reach).catch((err: unknown) => showError(errorEl, err));
       },
+      onSelectSite,
       () => {
         refresh().catch((err: unknown) => showError(errorEl, err));
       },

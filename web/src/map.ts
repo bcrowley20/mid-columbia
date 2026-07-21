@@ -19,9 +19,15 @@ export class SiteMap {
   private readonly map: L.Map;
   private readonly markersLayer: L.LayerGroup;
   private readonly emptyStateEl: HTMLElement;
+  private readonly onSelectSite: (reach: ReachOut, site: ReachOut["sites"][number]) => void;
 
-  constructor(container: HTMLElement, emptyStateEl: HTMLElement) {
+  constructor(
+    container: HTMLElement,
+    emptyStateEl: HTMLElement,
+    onSelectSite: (reach: ReachOut, site: ReachOut["sites"][number]) => void,
+  ) {
     this.emptyStateEl = emptyStateEl;
+    this.onSelectSite = onSelectSite;
     this.map = L.map(container).setView(FALLBACK_CENTER, FALLBACK_ZOOM);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -60,6 +66,7 @@ export class SiteMap {
 
       const marker = L.circleMarker(latLng, SITE_MARKER_STYLE);
       marker.bindTooltip(renderSitePopup(summaries[index]), { direction: "top", offset: [0, -8] });
+      marker.on("click", () => this.onSelectSite(reach, site));
       marker.addTo(this.markersLayer);
     });
 

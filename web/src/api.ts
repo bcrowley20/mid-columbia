@@ -7,6 +7,7 @@ import type {
   SiteSummaryOut,
   SiteWrite,
   WellOut,
+  WellReadingsOut,
   WellSummaryOut,
   WellWrite,
 } from "./types";
@@ -55,6 +56,12 @@ export function fetchSiteSummary(siteId: string): Promise<SiteSummaryOut> {
 export function fetchWellSummary(wellId: string): Promise<WellSummaryOut> {
   const params = new URLSearchParams({ well_id: wellId });
   return getJson(`${API_BASE}/wells/summary?${params}`);
+}
+
+export function fetchWellReadings(wellId: string, parameter: string, from?: Date): Promise<WellReadingsOut> {
+  const params = new URLSearchParams({ well_id: wellId, parameter });
+  if (from) params.set("from", from.toISOString());
+  return getJson(`${API_BASE}/wells/readings?${params}`);
 }
 
 // ---- Project management ------------------------------------------------

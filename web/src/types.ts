@@ -57,6 +57,21 @@ export interface SiteSummaryOut {
   wells: WellSummaryOut[];
 }
 
+export interface SeriesPointOut {
+  timestamp_utc: string;
+  value: number | null;
+  unit: string;
+  // Only set for a calculated series (e.g. water_depth) - "unknown_*" values
+  // mean the point exists but has no usable value (see calculations/water_depth.py).
+  status: string | null;
+}
+
+export interface WellReadingsOut {
+  well_id: string;
+  parameter: string;
+  points: SeriesPointOut[];
+}
+
 // ---- Management (Phase 5) request bodies -----------------------------
 // Mirror api/schemas.py's *Write models - full-object replace, not a partial
 // PATCH merge (see that file's note on why).
