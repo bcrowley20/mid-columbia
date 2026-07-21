@@ -35,7 +35,10 @@ body {
 }
 
 #app-header {
-  padding: 0.75rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.25rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
   flex-shrink: 0;
@@ -45,6 +48,11 @@ body {
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
+}
+
+#app-logo {
+  height: 40px;
+  width: auto;
 }
 
 .banner {

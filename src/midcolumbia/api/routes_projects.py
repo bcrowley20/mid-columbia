@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..catalog import Catalog, find_site
 from ..storage import db
 from .deps import get_catalogs, get_db
-from .schemas import ProjectOut, SiteSummaryOut, WellSiteSummary
+from .schemas import ProjectOut, SiteSummaryOut, WellSummaryOut
 
 router = APIRouter(tags=["projects"])
 
@@ -32,7 +32,7 @@ def get_site_summary(
     reach, site = found
 
     wells = [
-        WellSiteSummary(
+        WellSummaryOut(
             well_id=well.id,
             well_name=well.name,
             well_type=well.well_type.value,

@@ -1,8 +1,8 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import { fetchSiteSummary } from "./api";
-import type { ReachOut, SiteSummaryOut, WellOut } from "./types";
+import { fetchSiteSummary, fetchWellSummary } from "./api";
+import type { ReachOut, SiteSummaryOut, WellSummaryOut } from "./types";
 
 // No default view configured yet (project.json5's map.center/zoom isn't wired
 // through the API - Phase 4 uses fitBounds on real site coordinates instead,
@@ -46,9 +46,12 @@ export class SiteMap {
     }
     this.hideEmptyState();
 
-    // Fetch every site's summary up front (a handful of requests per reach)
-    // so hover tooltips are instant rather than round-tripping on mouseover.
-    const summaries = await Promise.all(locatedSites.map((site) => fetchSiteSummary(site.id)));
+    // Fetch every site's summary (and the ATM well's, if located) up front so
+    // hover tooltips are instant rather than round-tripping on mouseover.
+    const [summaries, atmSummary] = await Promise.all([
+      Promise.all(locatedSites.map((site) => fetchSiteSummary(site.id))),
+      atmLocated ? fetchWellSummary(atmWell.id) : Promise.resolve(null),
+    ]);
 
     const points: L.LatLngExpression[] = [];
     locatedSites.forEach((site, index) => {
@@ -60,12 +63,12 @@ export class SiteMap {
       marker.addTo(this.markersLayer);
     });
 
-    if (atmLocated) {
+    if (atmLocated && atmSummary !== null) {
       const latLng: L.LatLngExpression = [atmWell.latitude as number, atmWell.longitude as number];
       points.push(latLng);
 
       const marker = L.circleMarker(latLng, ATM_MARKER_STYLE);
-      marker.bindTooltip(renderAtmPopup(reach, atmWell), { direction: "top", offset: [0, -8] });
+      marker.bindTooltip(renderAtmPopup(reach.name, atmSummary), { direction: "top", offset: [0, -8] });
       marker.addTo(this.markersLayer);
     }
 
@@ -105,12 +108,14 @@ function renderSitePopup(summary: SiteSummaryOut): string {
     </div>`;
 }
 
-function renderAtmPopup(reach: ReachOut, atmWell: WellOut): string {
+function renderAtmPopup(reachName: string, summary: WellSummaryOut): string {
   return `
     <div class="site-popup">
-      <div class="site-popup-title">${escapeHtml(reach.name)} &rsaquo; ${escapeHtml(atmWell.name)}</div>
+      <div class="site-popup-title">${escapeHtml(reachName)} &rsaquo; ${escapeHtml(summary.well_name)}</div>
       <div class="popup-well">
         <span class="popup-well-name">Atmospheric reference</span>
+        <span class="popup-well-stat">${summary.point_count.toLocaleString()} pts</span>
+        <span class="popup-well-stat">${formatTimestamp(summary.last_reading_at)}</span>
       </div>
     </div>`;
 }

@@ -1,4 +1,4 @@
-import type { ProjectOut, SiteSummaryOut } from "./types";
+import type { ProjectOut, SiteSummaryOut, WellSummaryOut } from "./types";
 
 const API_BASE = "/api";
 
@@ -17,4 +17,9 @@ export function fetchProjects(): Promise<ProjectOut[]> {
 export function fetchSiteSummary(siteId: string): Promise<SiteSummaryOut> {
   const params = new URLSearchParams({ site_id: siteId });
   return getJson(`${API_BASE}/sites/summary?${params}`);
+}
+
+export function fetchWellSummary(wellId: string): Promise<WellSummaryOut> {
+  const params = new URLSearchParams({ well_id: wellId });
+  return getJson(`${API_BASE}/wells/summary?${params}`);
 }

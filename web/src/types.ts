@@ -34,7 +34,7 @@ export interface ProjectOut {
   reaches: ReachOut[];
 }
 
-export interface WellSiteSummary {
+export interface WellSummaryOut {
   well_id: string;
   well_name: string;
   well_type: string;
@@ -49,5 +49,5 @@ export interface SiteSummaryOut {
   reach_name: string;
   latitude: number | null;
   longitude: number | null;
-  wells: WellSiteSummary[];
+  wells: WellSummaryOut[];
 }

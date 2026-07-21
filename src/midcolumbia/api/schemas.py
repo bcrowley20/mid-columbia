@@ -84,10 +84,11 @@ class ProjectOut(BaseModel):
         )
 
 
-class WellSiteSummary(BaseModel):
-    """One well's row within a site's hover-popup summary - matches the
-    Project Description's explicit field list (well name, point count, last
-    data point), plus reach/site name are on the parent SiteSummaryOut.
+class WellSummaryOut(BaseModel):
+    """A well's data stats - matches the Project Description's explicit
+    field list (well name, point count, last data point). Used both as a row
+    within a site's hover-popup summary (SiteSummaryOut.wells) and standalone
+    for a well with no site (the reach-level ATM well - GET /wells/summary).
     """
 
     well_id: str
@@ -104,7 +105,7 @@ class SiteSummaryOut(BaseModel):
     reach_name: str
     latitude: float | None
     longitude: float | None
-    wells: list[WellSiteSummary]
+    wells: list[WellSummaryOut]
 
 
 class SeriesPointOut(BaseModel):

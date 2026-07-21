@@ -37,8 +37,9 @@ def test_load_catalog_flat_wells_include_atm(data_root: Path):
     assert atm_well.well_type is WellType.ATMOSPHERIC
     assert atm_well.site_id is None
     assert atm_well.device_serial == "22332694"
-    assert atm_well.latitude == pytest.approx(47.2557)
-    assert atm_well.longitude == pytest.approx(-120.906)
+    # Real coordinates - the user moved these by hand after Phase 4.
+    assert atm_well.latitude == pytest.approx(47.25533)
+    assert atm_well.longitude == pytest.approx(-120.90511)
 
 
 def test_site_wells_have_no_own_coordinates(data_root: Path):

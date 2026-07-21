@@ -121,6 +121,23 @@ def test_get_well_metadata_404_for_unknown_well(populated_client: TestClient):
     assert r.status_code == 404
 
 
+def test_get_well_summary_works_for_atm_well_not_just_site_wells(populated_client: TestClient):
+    # The ATM well isn't part of any Site, so /sites/summary can't cover it -
+    # this is what the map's ATM marker tooltip uses instead.
+    r = populated_client.get("/api/wells/summary", params={"well_id": ATM_ID})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["well_name"] == "Carlson ATM"
+    assert data["well_type"] == "atmospheric"
+    assert data["point_count"] > 0
+    assert data["last_reading_at"] is not None
+
+
+def test_get_well_summary_404_for_unknown_well(populated_client: TestClient):
+    r = populated_client.get("/api/wells/summary", params={"well_id": "nonexistent"})
+    assert r.status_code == 404
+
+
 def test_well_readings_raw_parameter(populated_client: TestClient):
     r = populated_client.get("/api/wells/readings", params={"well_id": GW1_ID, "parameter": "water_pressure"})
     assert r.status_code == 200
