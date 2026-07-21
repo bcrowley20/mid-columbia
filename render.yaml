@@ -9,5 +9,5 @@ services:
     env: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: free
+    plan: Starter
     healthCheckPath: /api/health
