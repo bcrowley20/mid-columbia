@@ -7,5 +7,8 @@
         "temperature_unit": "degC",
         "depth_unit": "ft",
         "timezone": "America/Los_Angeles"
+    },
+    "calculations": {
+        "max_atm_gap_hours": 12
     }
 }

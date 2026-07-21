@@ -22,11 +22,21 @@ class DisplaySettings:
 
 
 @dataclass(frozen=True)
+class CalculationSettings:
+    # Maximum time gap, in hours, between a water reading and the nearest ATM
+    # reading it's paired with for the water depth calculation. Beyond this gap
+    # the ATM reading is too far away to trust, so depth is marked unknown
+    # instead (see Implementation Plan.md section 10).
+    max_atm_gap_hours: float
+
+
+@dataclass(frozen=True)
 class Settings:
     data_root: Path
     database_path: Path
     enabled_device_handlers: tuple[str, ...]
     display: DisplaySettings
+    calculations: CalculationSettings
 
 
 def load_settings(path: Path = DEFAULT_SETTINGS_PATH) -> Settings:
@@ -44,6 +54,7 @@ def load_settings(path: Path = DEFAULT_SETTINGS_PATH) -> Settings:
 
     try:
         display_raw = raw["display"]
+        calculations_raw = raw["calculations"]
         return Settings(
             data_root=Path(raw["data_root"]),
             database_path=Path(raw["database_path"]),
@@ -53,6 +64,9 @@ def load_settings(path: Path = DEFAULT_SETTINGS_PATH) -> Settings:
                 temperature_unit=display_raw["temperature_unit"],
                 depth_unit=display_raw["depth_unit"],
                 timezone=display_raw["timezone"],
+            ),
+            calculations=CalculationSettings(
+                max_atm_gap_hours=calculations_raw["max_atm_gap_hours"],
             ),
         )
     except KeyError as exc:

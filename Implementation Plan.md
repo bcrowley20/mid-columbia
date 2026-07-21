@@ -1,6 +1,6 @@
 # Mid-Columbia Fisheries Data Analysis — Implementation Plan
 
-Status: draft v4 — **Phase 0 complete**; agreed direction for Phases 1–3, later phases sketched and open to revision as we build.
+Status: draft v5 — **Phase 0 complete**; agreed direction for Phases 1–3, later phases sketched and open to revision as we build.
 
 This plan is the working reference for implementation. Update it as decisions change; don't let it drift out of sync with the code.
 
@@ -219,10 +219,13 @@ Three tiers, matching both the Project Description and CLAUDE.md. Schemas below 
        "temperature_unit": "degC",
        "depth_unit": "ft",
        "timezone": "America/Los_Angeles"
+     },
+     "calculations": {
+       "max_atm_gap_hours": 12
      }
    }
    ```
-   `load_settings()` raises `SettingsError` (not a silent default) if the file is missing, isn't valid JSON, or is missing a required field.
+   `load_settings()` raises `SettingsError` (not a silent default) if the file is missing, isn't valid JSON, or is missing a required field. `calculations.max_atm_gap_hours` is user-configurable per §10/§15 — the water depth calculation won't pair a water reading with an ATM reading further away than this many hours.
 
 2. **`data/<Project>/project.json5`** — project-level metadata, JSON5 with comments allowed. Contains display name, description, default map center/zoom, the **IANA timezone** used to interpret XLSX local timestamps (§6), and one entry per **Reach**, each declaring its own `folder` (relative to the project) and its required **ATM well** (`name`, `folder` relative to the Reach, `device_serial`). Sites are *not* listed here — they're discovered by walking the Reach folder for subdirectories that contain their own `site.json5` (see §6 scanner, Phase 1).
 
@@ -253,8 +256,8 @@ Still to do in Phase 0/1: write `project.json5` and `site.json5` for this real e
 - Each calculation is a self-contained, named unit (not buried inline) exposing: required input parameter types, output type/unit, and a `compute()` function. Registered similarly to the ingestion handlers.
 - **Water depth — finalized formula and algorithm:**
   - `depth = (well_pressure - atm_pressure) * 0.334553`, where `well_pressure` is a `WATER_PRESSURE` reading (kPa) from an IS or GW well, `atm_pressure` is an `AIR_PRESSURE` reading (kPa) from that well's paired ATM well, and the result unit is **feet** (0.334553 is the kPa→ft-of-water conversion constant). This applies uniformly to GW and IS wells — vendor-provided pressure/depth values in the source files are never used (see §2, §9), only the raw pressure we ingest ourselves.
-  - For each `WATER_PRESSURE` reading, find the **closest-in-time** `AIR_PRESSURE` reading from the paired ATM well (nearest neighbor by absolute time difference, either before or after — not interpolation between two bracketing points). Compute depth from that pair.
-  - **If the paired ATM well has no readings at all to pair with** (e.g. no ATM data ingested yet, or the paired ATM well doesn't resolve), the depth for that timestamp is explicitly marked **unknown** rather than omitted or computed with a bad/default value. "Unknown" is a first-class result, not an absence of a result — the UI should be able to show "no depth available for this period" distinctly from "no pressure reading at all."
+  - For each `WATER_PRESSURE` reading, find the **closest-in-time** `AIR_PRESSURE` reading from the paired ATM well (nearest neighbor by absolute time difference, either before or after — not interpolation between two bracketing points). Compute depth from that pair, **provided the gap is within `settings.calculations.max_atm_gap_hours`** (user-configurable, default **12 hours** — decided and implemented in Phase 0's `config.py`).
+  - **If the paired ATM well has no readings at all to pair with, or the closest one is further away than `max_atm_gap_hours`**, the depth for that timestamp is explicitly marked **unknown** rather than omitted or computed from a too-distant/bad/default value. "Unknown" is a first-class result, not an absence of a result — the UI should be able to show "no depth available for this period" distinctly from "no pressure reading at all," and ideally distinguish "no ATM data at all" from "ATM data exists but too far away" for troubleshooting.
   - Output representation is a distinct type from raw `Reading`s, since it's derived and can carry an unknown state:
     ```python
     @dataclass(frozen=True)
@@ -264,9 +267,8 @@ Still to do in Phase 0/1: write `project.json5` and `site.json5` for this real e
         calculation: str            # e.g. "water_depth"
         value: float | None         # None when unknown
         unit: str                   # "ft" for water_depth
-        status: str                 # "ok" | "unknown_no_atm_data"
+        status: str                 # "ok" | "unknown_no_atm_data" | "unknown_atm_gap_too_large"
     ```
-  - Open question, not yet decided (see §15): whether "closest" should have a maximum allowed time gap before still calling it unknown (e.g. don't pair a reading with an ATM point that's weeks away). Current behavior per the user's instruction: use whatever ATM reading is closest, regardless of gap size, and only mark unknown when the paired ATM well has zero data to search.
 - Results are stored (not recomputed on every request) but must be invalidated/recomputed when their input readings change (e.g., new data ingested for that well or its paired ATM well).
 
 ## 11. API surface (Phase 3, sketch)
@@ -312,7 +314,6 @@ Each phase ends with passing tests before moving to the next.
 - How to handle the DST fall-back ambiguous hour (the repeated 1–2 AM local hour) for XLSX timestamp conversion — needs an explicit, documented rule (e.g. assume the first occurrence / standard time) rather than leaving it to `zoneinfo` defaults unexamined (Phase 1).
 - Whether `Button Up`/`Button Down` events (XLSX) are worth surfacing in the UI as site-visit markers (Phase 1/6).
 - Whether the XLSX data sheet is reliably always the first sheet, once we see files from more devices/exports (Phase 1).
-- Whether "closest ATM reading" for the water depth calculation should have a maximum allowed time gap before falling back to "unknown," or always use the nearest available point regardless of distance (current behavior: no cap — see §10) (Phase 2).
 - Iconography for map markers beyond "dots" (Phase 4, per Project Description — deferred by them too).
 - Detail view design (Phase 6, deferred by Project Description).
 - Display units/timezone preference (store UTC + source units internally regardless; decide user-facing default in Phase 4).

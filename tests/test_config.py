@@ -13,6 +13,7 @@ def test_load_settings_from_repo_root(repo_root: Path):
     assert "hoboconnect_xlsx" in settings.enabled_device_handlers
     assert settings.display.pressure_unit == "kPa"
     assert settings.display.timezone == "America/Los_Angeles"
+    assert settings.calculations.max_atm_gap_hours == 12
 
 
 def test_load_settings_missing_file_raises(tmp_path: Path):
@@ -30,5 +31,25 @@ def test_load_settings_invalid_json_raises(tmp_path: Path):
 def test_load_settings_missing_field_raises(tmp_path: Path):
     bad_file = tmp_path / "settings.json"
     bad_file.write_text('{"data_root": "data"}', encoding="utf-8")
+    with pytest.raises(SettingsError, match="missing required field"):
+        load_settings(bad_file)
+
+
+def test_load_settings_missing_calculations_section_raises(tmp_path: Path):
+    bad_file = tmp_path / "settings.json"
+    bad_file.write_text(
+        """{
+            "data_root": "data",
+            "database_path": "midcolumbia.sqlite3",
+            "enabled_device_handlers": [],
+            "display": {
+                "pressure_unit": "kPa",
+                "temperature_unit": "degC",
+                "depth_unit": "ft",
+                "timezone": "America/Los_Angeles"
+            }
+        }""",
+        encoding="utf-8",
+    )
     with pytest.raises(SettingsError, match="missing required field"):
         load_settings(bad_file)
