@@ -1,44 +1,90 @@
-import type { ProjectOut, ReachOut } from "./types";
+import * as mgmt from "./management";
+import type { ProjectOut, ReachOut, SiteOut, WellOut } from "./types";
 
-// Renders the Project > Reach > Site tree (Implementation Plan.md section 12).
-// Clicking a Reach is the only interactive behavior in Phase 4 - selecting it
-// re-centers the map. Sites are listed for context but aren't clickable yet
-// (that's the Phase 6 detail view, not built here).
-export function renderTree(container: HTMLElement, projects: ProjectOut[], onSelectReach: (reach: ReachOut) => void): void {
+// Renders the Project > Reach > Site > Well tree (Implementation Plan.md
+// section 12) plus the Phase 5 add/edit/delete controls at every level.
+// Clicking a Reach re-centers the map (Phase 4). Sites/Wells aren't
+// clickable for selection yet - that's the Phase 6 detail view.
+export function renderTree(
+  container: HTMLElement,
+  projects: ProjectOut[],
+  onSelectReach: (reach: ReachOut) => void,
+  onDataChanged: () => void,
+): void {
   container.innerHTML = "";
   const root = document.createElement("ul");
   root.className = "tree";
 
   for (const project of projects) {
-    root.appendChild(renderProjectNode(project, container, onSelectReach));
+    root.appendChild(renderProjectNode(project, container, onSelectReach, onDataChanged));
   }
 
   container.appendChild(root);
 }
 
-function renderProjectNode(project: ProjectOut, treeRoot: HTMLElement, onSelectReach: (reach: ReachOut) => void): HTMLElement {
+function renderRow(labelText: string, labelClass: string): { item: HTMLElement; label: HTMLElement; actions: HTMLElement } {
   const item = document.createElement("li");
+  const row = document.createElement("div");
+  row.className = "tree-row";
 
   const label = document.createElement("div");
-  label.className = "tree-label tree-label-project";
-  label.textContent = project.name;
-  item.appendChild(label);
+  label.className = `tree-label ${labelClass}`;
+  label.textContent = labelText;
+  row.appendChild(label);
+
+  const actions = document.createElement("span");
+  actions.className = "tree-actions";
+  row.appendChild(actions);
+
+  item.appendChild(row);
+  return { item, label, actions };
+}
+
+function addActionButton(actions: HTMLElement, text: string, title: string, onClick: () => void): void {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn-action";
+  button.textContent = text;
+  button.title = title;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onClick();
+  });
+  actions.appendChild(button);
+}
+
+function renderProjectNode(
+  project: ProjectOut,
+  treeRoot: HTMLElement,
+  onSelectReach: (reach: ReachOut) => void,
+  onDataChanged: () => void,
+): HTMLElement {
+  const { item, actions } = renderRow(project.name, "tree-label-project");
+
+  addActionButton(actions, "+ Reach", "Add a reach to this project", () =>
+    mgmt.openCreateReachDialog(project.id, onDataChanged),
+  );
+  addActionButton(actions, "Edit", "Edit this project", () => mgmt.openEditProjectDialog(project, onDataChanged));
+  addActionButton(actions, "Delete", "Delete this project", () => {
+    mgmt.confirmAndDeleteProject(project, onDataChanged).catch((err: unknown) => alert(String(err)));
+  });
 
   const reachList = document.createElement("ul");
   for (const reach of project.reaches) {
-    reachList.appendChild(renderReachNode(reach, treeRoot, onSelectReach));
+    reachList.appendChild(renderReachNode(reach, treeRoot, onSelectReach, onDataChanged));
   }
   item.appendChild(reachList);
 
   return item;
 }
 
-function renderReachNode(reach: ReachOut, treeRoot: HTMLElement, onSelectReach: (reach: ReachOut) => void): HTMLElement {
-  const item = document.createElement("li");
-
-  const label = document.createElement("div");
-  label.className = "tree-label tree-label-reach";
-  label.textContent = reach.name;
+function renderReachNode(
+  reach: ReachOut,
+  treeRoot: HTMLElement,
+  onSelectReach: (reach: ReachOut) => void,
+  onDataChanged: () => void,
+): HTMLElement {
+  const { item, label, actions } = renderRow(reach.name, "tree-label-reach");
   label.tabIndex = 0;
   label.dataset.reachId = reach.id;
 
@@ -56,18 +102,47 @@ function renderReachNode(reach: ReachOut, treeRoot: HTMLElement, onSelectReach: 
       select();
     }
   });
-  item.appendChild(label);
+
+  addActionButton(actions, "+ Site", "Add a site to this reach", () => mgmt.openCreateSiteDialog(reach.id, onDataChanged));
+  addActionButton(actions, "Edit", "Edit this reach and its ATM well", () => mgmt.openEditReachDialog(reach, onDataChanged));
+  addActionButton(actions, "Delete", "Delete this reach", () => {
+    mgmt.confirmAndDeleteReach(reach, onDataChanged).catch((err: unknown) => alert(String(err)));
+  });
 
   const siteList = document.createElement("ul");
   for (const site of reach.sites) {
-    const siteItem = document.createElement("li");
-    const siteLabel = document.createElement("div");
-    siteLabel.className = "tree-label tree-label-site";
-    siteLabel.textContent = site.name;
-    siteItem.appendChild(siteLabel);
-    siteList.appendChild(siteItem);
+    siteList.appendChild(renderSiteNode(site, onDataChanged));
   }
   item.appendChild(siteList);
+
+  return item;
+}
+
+function renderSiteNode(site: SiteOut, onDataChanged: () => void): HTMLElement {
+  const { item, actions } = renderRow(site.name, "tree-label-site");
+
+  addActionButton(actions, "+ Well", "Add a well to this site", () => mgmt.openCreateWellDialog(site.id, onDataChanged));
+  addActionButton(actions, "Edit", "Edit this site", () => mgmt.openEditSiteDialog(site, onDataChanged));
+  addActionButton(actions, "Delete", "Delete this site", () => {
+    mgmt.confirmAndDeleteSite(site, onDataChanged).catch((err: unknown) => alert(String(err)));
+  });
+
+  const wellList = document.createElement("ul");
+  for (const well of site.wells) {
+    wellList.appendChild(renderWellNode(well, onDataChanged));
+  }
+  item.appendChild(wellList);
+
+  return item;
+}
+
+function renderWellNode(well: WellOut, onDataChanged: () => void): HTMLElement {
+  const { item, actions } = renderRow(`${well.name} (${well.well_type === "in_stream" ? "IS" : "GW"})`, "tree-label-well");
+
+  addActionButton(actions, "Edit", "Edit this well", () => mgmt.openEditWellDialog(well, onDataChanged));
+  addActionButton(actions, "Delete", "Delete this well", () => {
+    mgmt.confirmAndDeleteWell(well, onDataChanged).catch((err: unknown) => alert(String(err)));
+  });
 
   return item;
 }

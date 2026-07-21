@@ -72,6 +72,7 @@ def test_list_projects(populated_client: TestClient):
 
     project = data[0]
     assert project["name"] == "Carlson Creek Restoration"
+    assert project["timezone"] == "America/Los_Angeles"
     reach = project["reaches"][0]
     assert reach["name"] == "Lower Stream"
     assert len(reach["sites"]) == 5

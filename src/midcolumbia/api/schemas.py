@@ -73,6 +73,11 @@ class ReachOut(BaseModel):
 class ProjectOut(BaseModel):
     id: str
     name: str
+    description: str
+    timezone: str
+    map_center_lat: float | None
+    map_center_lon: float | None
+    map_zoom: int
     reaches: list[ReachOut]
 
     @classmethod
@@ -80,6 +85,11 @@ class ProjectOut(BaseModel):
         return cls(
             id=project.id,
             name=project.name,
+            description=project.description,
+            timezone=project.timezone,
+            map_center_lat=project.map_center_lat,
+            map_center_lon=project.map_center_lon,
+            map_zoom=project.map_zoom,
             reaches=[ReachOut.from_reach(r, wells) for r in project.reaches],
         )
 
@@ -138,3 +148,38 @@ class IngestRunOut(BaseModel):
 class IngestStatusOut(BaseModel):
     has_run: bool
     result: IngestRunOut | None = None
+
+
+# ---- Management (Phase 5) request bodies ----------------------------------
+# Create/Update share the same shape for every entity here (full-object
+# replace, not a partial PATCH merge) - simpler to reason about than merge
+# semantics, and the edit forms always start from the current values anyway.
+
+
+class ProjectWrite(BaseModel):
+    name: str
+    description: str = ""
+    timezone: str
+    map_center_lat: float | None = None
+    map_center_lon: float | None = None
+    map_zoom: int = 12
+
+
+class ReachWrite(BaseModel):
+    name: str
+    atm_name: str
+    atm_device_serial: str | None = None
+    atm_latitude: float | None = None
+    atm_longitude: float | None = None
+
+
+class SiteWrite(BaseModel):
+    name: str
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class WellWrite(BaseModel):
+    name: str
+    well_type: str  # "in_stream" | "groundwater" - validated by the route
+    device_serial: str | None = None

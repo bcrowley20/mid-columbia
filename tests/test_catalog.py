@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from midcolumbia.catalog import CatalogError, discover_project_folders, load_catalog
+from midcolumbia.catalog import CatalogError, discover_project_folders, find_project, find_reach, load_catalog
 from midcolumbia.models import WellType
 
 
@@ -63,6 +63,33 @@ def test_well_folder_path_is_real_filesystem_path(data_root: Path):
     gw1 = catalog.wells["carlson-creek-restoration/lower-stream/site-1/gw-1"]
     assert (data_root / gw1.folder_path).is_dir()
     assert gw1.folder_path == "Carlson Creek Restoration/Lower Stream/Site 1/GW 1"
+
+
+def test_project_reach_site_have_folder_paths(data_root: Path):
+    catalog = load_catalog(data_root, "Carlson Creek Restoration")
+    assert catalog.project.folder_path == "Carlson Creek Restoration"
+    reach = catalog.project.reaches[0]
+    assert reach.folder_path == "Carlson Creek Restoration/Lower Stream"
+    site_1 = next(s for s in reach.sites if s.name == "Site 1")
+    assert site_1.folder_path == "Carlson Creek Restoration/Lower Stream/Site 1"
+    assert (data_root / site_1.folder_path).is_dir()
+
+
+def test_find_reach_and_find_project(data_root: Path):
+    catalog = load_catalog(data_root, "Carlson Creek Restoration")
+
+    found = find_reach([catalog], "carlson-creek-restoration/lower-stream")
+    assert found is not None
+    project, reach = found
+    assert project.id == "carlson-creek-restoration"
+    assert reach.name == "Lower Stream"
+
+    assert find_reach([catalog], "nonexistent") is None
+
+    project = find_project([catalog], "carlson-creek-restoration")
+    assert project is not None
+    assert project.name == "Carlson Creek Restoration"
+    assert find_project([catalog], "nonexistent") is None
 
 
 def test_missing_project_json5_raises(tmp_path: Path):

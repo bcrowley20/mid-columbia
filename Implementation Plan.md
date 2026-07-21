@@ -1,6 +1,6 @@
 # Mid-Columbia Fisheries Data Analysis — Implementation Plan
 
-Status: draft v9 — **Phases 0–4 complete**; agreed direction for Phase 5, later phases sketched and open to revision as we build.
+Status: draft v10 — **Phases 0–5 complete**; agreed direction for Phase 6, later phases sketched and open to revision as we build.
 
 This plan is the working reference for implementation. Update it as decisions change; don't let it drift out of sync with the code.
 
@@ -46,7 +46,7 @@ The sample set at `data/Carlson Creek Restoration/Lower Stream/` (5 sites, each 
 - **XLSX parsing**: `openpyxl` (read-only mode for performance on large sheets).
 - **Frontend**: plain TypeScript + Vite (no heavy SPA framework required for v1's scope: a tree view, a map, hover popups, and a management form set). **Leaflet** for the map (no API key needed, works fine for local-first use, easy to swap tile providers later). **Chart.js** for the detail-view time series once that's defined (Phase 6).
   - This is a recommendation, not a locked decision — revisit if the UI grows complex enough to want React/Svelte for state management.
-- **Testing**: `pytest`, run via `uv run pytest`. Real Carlson CSV/XLSX files double as parser test fixtures. Do not re-run tests after documentation updates.
+- **Testing**: `pytest`, run via `uv run pytest`. Real Carlson CSV/XLSX files double as parser test fixtures.
 
 ## 4. Codebase layout
 
@@ -58,6 +58,7 @@ mid-columbia/
     midcolumbia/
       models.py                # master dataclasses: Reading, DeploymentEvent, Well, Site, Reach, Project
       catalog.py                # project.json5/site.json5 -> dataclasses (id scheme, folder resolution)
+      management.py              # Phase 5: create/update/(soft-)delete Project/Reach/Site/Well
       config.py                  # settings.json loading
       ingest_cli.py               # `uv run midcolumbia-ingest` - runs a full scan, prints a summary
       ingestion/
@@ -76,8 +77,8 @@ mid-columbia/
         app.py                     # FastAPI app, CORS, exception handlers, health check
         deps.py                     # get_settings/get_db/get_catalogs dependencies
         schemas.py                   # Pydantic response models
-        routes_projects.py            # GET /projects, GET /sites/summary
-        routes_wells.py                # GET /wells
+        routes_projects.py            # GET/POST/PATCH/DELETE /projects, /reaches, /sites; GET /sites/summary
+        routes_wells.py                # GET/POST/PATCH/DELETE /wells; GET /wells/summary
         routes_readings.py              # GET /wells/readings
         routes_ingest.py                # POST /ingest/run, GET /ingest/status
       serve_cli.py               # `uv run midcolumbia-serve` - runs the dev server
@@ -85,11 +86,12 @@ mid-columbia/
     index.html                 # two-pane app shell: #tree-pane, #map-pane
     vite.config.ts              # dev proxy: /api/* -> http://127.0.0.1:8000
     src/
-      main.ts                    # bootstrap: fetch projects, wire tree -> map
-      api.ts                      # typed fetch wrappers for the Phase 3 API
+      main.ts                    # bootstrap + refresh(): fetch projects, wire tree -> map, re-render after any mutation
+      api.ts                      # typed fetch wrappers for the Phase 3 API + Phase 5 CRUD
       types.ts                    # hand-kept mirror of api/schemas.py
-      tree.ts                     # Project > Reach > Site tree, reach selection
+      tree.ts                     # Project > Reach > Site > Well tree, reach selection, add/edit/delete buttons
       map.ts                       # Leaflet map, site dots, hover tooltips
+      management.ts                # Phase 5: shared <dialog> form logic for create/edit/delete
       style.css
   data/
     Carlson Creek Restoration/            # Project
@@ -121,6 +123,8 @@ mid-columbia/
     test_calculations_water_depth.py   # formula/nearest-neighbor/gap-threshold unit tests
     test_calculations_runner.py         # integration: compute_all against real Carlson data
     test_api.py                         # FastAPI TestClient, full endpoint coverage against real Carlson data
+    test_management.py                  # unit tests for management.py, isolated tmp_path data root
+    test_api_management.py               # CRUD endpoints via TestClient, isolated tmp_path data root
 ```
 
 ## 5. Data model (master dataclasses)
@@ -190,6 +194,8 @@ class Site:
     latitude: float | None          # None until set via the Site Management UI (Phase 5)
     longitude: float | None
     wells: list[Well]
+    folder_path: str                # added in Phase 5 - same convention as Well.folder_path,
+                                     # lets management.py locate site.json5 without reverse-engineering a path from the id slug
 
 @dataclass
 class Reach:
@@ -198,17 +204,28 @@ class Reach:
     name: str
     atm_well_id: str                # every Reach must have exactly one ATM well (per Project Description)
     sites: list[Site]
+    folder_path: str                # added in Phase 5 - e.g. "Carlson Creek Restoration/Lower Stream"
 
 @dataclass
 class Project:
     id: str
     name: str
     reaches: list[Reach]
+    folder_path: str                 # added in Phase 5 - the project's own folder name
+    # Added in Phase 5 - project.json5's own fields (§7), needed so the
+    # management UI's edit form has something to pre-fill. `timezone` also
+    # lives on Catalog (used by the ingestion scanner) - duplicated rather
+    # than refactored, since both are always sourced from the same raw field.
+    description: str = ""
+    timezone: str = ""
+    map_center_lat: float | None = None
+    map_center_lon: float | None = None
+    map_zoom: int = 12
 ```
 
 Notes:
 - Every dataclass that can fail to resolve something (e.g., a well with no paired ATM well) must have that `None` case explicitly handled by the caller — never silently skip a calculation. Per CLAUDE.md: "If None is returned, make sure it is handled by the calling function."
-- **IDs — decided in Phase 0**: `id` is a slug derived from the entity's path relative to `data/` (e.g. a Site 1 groundwater well's id is derived from `Carlson Creek Restoration/Lower Stream/Site 1/GW 1`), computed at load time by the Phase 1 catalog loader — **not** stored as a field in `project.json5`/`site.json5`. This keeps the config files from having a value that can drift out of sync with the actual folder name. Known tradeoff: renaming a folder changes its id, which would orphan any stored references (e.g. `paired_atm_well_id` resolved into the DB) until a rescan. Acceptable for now since Phase 5 (rename support) is well out — revisit if it becomes a real pain point.
+- **IDs — decided in Phase 0**: `id` is a slug derived from the entity's path relative to `data/` (e.g. a Site 1 groundwater well's id is derived from `Carlson Creek Restoration/Lower Stream/Site 1/GW 1`), computed at load time by the Phase 1 catalog loader — **not** stored as a field in `project.json5`/`site.json5`. This keeps the config files from having a value that can drift out of sync with the actual folder name. Known tradeoff: renaming a folder changes its id, which would orphan any stored references (e.g. `paired_atm_well_id` resolved into the DB) until a rescan. **Resolved for Phase 5, deliberately, by scope-limiting rather than solving it**: the management UI's "edit" forms only ever change a `name` field, never the `folder` a name was created with — `management.py` never renames a folder once created, so ids stay stable across every edit (verified in tests: `update_reach`/`update_well` assert `updated.id == original.id`). A future "rename the folder too" feature would need to actually solve the orphaning problem; not attempted here.
 
 ## 6. Ingestion module
 
@@ -347,7 +364,15 @@ class Calculation(ABC):
 - `POST /api/ingest/run` — runs `scan_all()` then `compute_all()` **synchronously within the request** (fast enough at v1 data scale — no background job queue built) and returns a summary (`IngestRunOut`); also stores it on `app.state.last_ingest_result`.
 - `GET /api/ingest/status` — returns the last run's summary, or `{"has_run": false, "result": null}` if the server hasn't run one yet. **In-memory only** (`app.state`) — resets on server restart. Acceptable for v1 (a fresh run is one request away); would need real persistence if "what happened on the last ingest" needs to survive a restart.
 - `GET /api/health` — trivial liveness check, added during Phase 3 (not in the original sketch) since it's useful for the frontend/tests to confirm the server is up.
-- CRUD endpoints for Project/Reach/Site/Well are Phase 5 (management UI), still not built.
+- **Management (Phase 5) — done.** Full create/update/delete for Project/Reach/Site/Well, all in `routes_projects.py` (Project/Reach/Site) and `routes_wells.py` (Well), backed by the new `management.py` module:
+  - `POST /api/projects` (body `ProjectWrite`) → 201 `ProjectOut`; `PATCH /api/projects?project_id=` → 200; `DELETE /api/projects?project_id=` → 204.
+  - `POST /api/reaches?project_id=` (body `ReachWrite` — includes the required ATM well's `atm_name`/`atm_device_serial`/`atm_latitude`/`atm_longitude`, since a Reach can't exist without one) → 201 `ReachOut`; `PATCH /api/reaches?reach_id=`; `DELETE /api/reaches?reach_id=`.
+  - `POST /api/sites?reach_id=` (body `SiteWrite`) → 201 `SiteOut`; `PATCH /api/sites?site_id=`; `DELETE /api/sites?site_id=`.
+  - `POST /api/wells?site_id=` (body `WellWrite`) → 201 `WellOut`; `PATCH /api/wells?well_id=`; `DELETE /api/wells?well_id=` — **Site-affiliated wells only**. A Reach's ATM well is created/edited/deleted through the Reach endpoints instead (`management.update_well`/`delete_well` explicitly reject an ATM well id with a 400, rather than silently doing something wrong or leaving a Reach without its required ATM well).
+  - Every create/update rewrites the affected `project.json5`/`site.json5` and re-`load_catalog`s to build the response, so what's returned always reflects what's actually on disk, not an in-memory guess.
+  - `ProjectOut` gained `description`/`timezone`/`map_center_lat`/`map_center_lon`/`map_zoom` (previously not in Project at all — never parsed off `project.json5`, since only `Catalog.timezone` needed it before now) — the edit form needs current values to pre-fill.
+  - `ReachOut.atm_well_id: str` was replaced with a nested `atm_well: WellOut` back in the Phase 4 follow-up; `WellOut` already carrying the ATM well's `latitude`/`longitude` turned out to also be exactly what the Reach edit form needed to pre-fill, at no extra cost.
+  - Bad input is a `400` with a real message (`ManagementError` → `HTTPException`): unknown IANA timezone, empty name, a folder-name collision, editing/deleting an ATM well through the well endpoints, or a `well_type` that isn't `"in_stream"`/`"groundwater"`. An unresolved parent/target id is a `404`.
 
 **Cross-cutting**:
 - `api/deps.py`: `get_settings()` loads `settings.json` fresh per call; `get_db()` yields a per-request `sqlite3.Connection` (opened/closed per request); `get_catalogs()` calls the new `catalog.load_all(data_root)` (loads every project found under `data_root`, for searching across all of them). Tests override just `get_settings` via `app.dependency_overrides` — `get_db`/`get_catalogs` both depend on it, so one override redirects everything to an isolated `tmp_path` database while still reading the real `data/` tree.
@@ -359,7 +384,14 @@ class Calculation(ABC):
 - `serve_cli.py` (`uv run midcolumbia-serve`) runs `uvicorn.run("midcolumbia.api.app:app", ...)` with `reload=True` for local dev, mirroring the `ingest_cli.py` pattern. Verified against real data with an actual running server (not just `TestClient`): `GET /api/health` and `GET /api/projects` both responded correctly over real HTTP on `127.0.0.1`.
 - Test dependency note: `httpx` (needed for FastAPI's `TestClient`) was replaced with **`httpx2`** — the installed Starlette version (1.3.1) deprecated `TestClient`'s use of `httpx` in favor of it; switching removed the deprecation warning entirely.
 
-## 12. Frontend — done (Phase 4)
+**`management.py` (Phase 5) — design decisions**:
+- **Deletes are soft, by explicit user decision, not a default**: a delete renames the relevant `.json5` (`project.json5` → `project.json5.deleted`, `site.json5` → `site.json5.deleted`) or removes just that entity's own entry from its *parent's* `.json5` array (a Reach's entry in `project.json5`'s `reaches`, a Well's entry in `site.json5`'s `wells`) — chosen per entity based on which file actually owns that entity's definition (Sites and Projects each have their own file; Reaches and Wells are array entries inside their parent's file). Either way, **the folder and every logger file underneath are never touched**, and the operation is reversible (rename the file back / re-add the entry) where an actual `rm -rf` would not be. Verified directly in tests: a marker file written into a well/reach folder before deletion is still present, byte-for-byte, afterward.
+- **Folders are never renamed after creation** — only the display `name` field changes on edit (§5's note on this). A folder-name collision on create is a clear `ManagementError`, not a silent overwrite or auto-suffix.
+- **JSON5 writes regenerate the whole file** via `json5.dumps(data, indent=4)` (which — happily, checked before committing to this approach — already produces unquoted keys and trailing commas matching our hand-written style, no bespoke pretty-printer needed) prefixed with a short static header comment. This means **hand-written per-file comments get replaced** the first time the UI saves a file it wasn't the one to create — an explicit, disclosed tradeoff (JSON5 was chosen for the *option* to hand-edit and comment, not a promise that the UI preserves whatever a human wrote there).
+- Every write ends by calling `catalog.load_catalog()` again and returning the freshly-reloaded object, rather than constructing the response from in-memory state — guarantees the API never reports something that doesn't match what's actually on disk.
+- Timezone validation uses the stdlib: `timezone_name in zoneinfo.available_timezones()`.
+
+## 12. Frontend — done (Phases 4–5)
 
 **Left pane** (`tree.ts`): renders Project > Reach > Site from `GET /api/projects`, sites listed under each Reach for context. Only Reach labels are interactive (per this phase's scope — sites aren't clickable yet, that's Phase 6's detail view). Clicking a Reach highlights it and calls into the map. Keyboard-accessible (`tabIndex` + Enter/Space, not just click).
 
@@ -376,7 +408,11 @@ class Calculation(ABC):
 
 **Verified in an actual browser**, not just by type-checking (`npx tsc --noEmit` and `npm run build` both clean): no headless browser tool was preinstalled, so Playwright + its bundled Chromium were installed into the scratch dir and driven with a small script (`nav` → wait for tree text → wait for `.leaflet-interactive` markers → screenshot → hover a marker → screenshot → check console errors). This is what caught the SQLite thread-safety bug (§11) — it only reproduced under the real concurrent requests a live browser session generates, never under the sequential `TestClient` tests. After the fix: 5 markers render, tree matches the real hierarchy, the hover tooltip shows correct real data (`GW 1 — 1,271 pts — 4/20/2026, 10:00:00 AM`, etc., matching numbers already verified in Phases 1–3), and the console is clean.
 
-**Site Management UI** (add/edit/delete Project/Reach/Site/Well, lat/long entry, ATM-pairing) is still Phase 5 — not built here.
+**Site Management UI — done (Phase 5)**: `tree.ts` now renders every level down to Well (leaf), and every node gets inline action buttons — `+ Reach`/`+ Site`/`+ Well` to add a child (not on Wells, which are leaves), plus `Edit`/`Delete` on everything including Projects. One shared `<dialog id="entity-dialog">` (`index.html`) is reused for every entity type and both create/edit modes; `management.ts` renders its fields from a small declarative `FieldSpec[]` per entity (label/type/required/step), pre-fills them for edit, and posts to the matching `api.ts` function on submit. A native `confirm()` gates every delete, with a message that's explicit about what does and doesn't happen (see §11's soft-delete note). After any successful mutation, `main.ts`'s `refresh()` re-fetches `/api/projects` and re-renders the tree **and** the map from scratch — no optimistic/partial state patching, simplest thing that's correct at this data scale — re-selecting the previously-selected reach if it still exists (found by id, not array position) or falling back to the first reach otherwise.
+- **Real accessibility bug caught by Playwright, fixed before it shipped**: the action buttons were originally `visibility: hidden` until `:hover` on the row (a common "declutter the tree" pattern). Playwright's `click()` refused to click them — its actionability check requires an element to *already* be visible before it will act, and it won't hover a different element first to reveal the target. That's not a Playwright quirk to work around; it's the same wall a keyboard-only or touch user would hit, since neither can hover at all. Fixed by making the buttons always visible (small, muted styling instead of hidden-until-hover) — a case where a test-tooling failure pointed at a genuine UX gap rather than needing a workaround.
+- The tree pane grew from 280px → 380px partway through, once the always-visible buttons started crowding out project names (`text-overflow: ellipsis` was truncating "Carlson Creek Restoration" to "Carlson Creek Res...").
+- `ReachWrite`'s fields double as the ATM well's own fields (`atm_name`, `atm_device_serial`, `atm_latitude`, `atm_longitude`) — creating/editing a Reach is the only way to create/edit its ATM well, matching the backend's "a Reach can't exist without exactly one ATM well" rule directly in the form rather than needing a separate always-required "add ATM well" step.
+- Verified with the same real-browser Playwright approach as Phase 4, against an **isolated copy** of the Carlson data (never the real `data/` tree, since these operations write to disk) — full lifecycle exercised end-to-end: add Reach → add Site → add Well → edit Well (confirmed correct pre-fill) → delete Well → delete Site → delete Reach, zero console errors throughout.
 
 **Follow-up after Phase 4 (requested by the user)**: the reach-level ATM well wasn't on the map at all — it isn't a Site, so it was unreachable from `reach.sites`. Added `latitude`/`longitude` to `models.Well` (§5, defaulted to `None` so every existing call site kept working) and to `project.json5`'s `atm_well` block (§7); the API's `ReachOut` now nests the full `atm_well: WellOut` instead of just `atm_well_id: str` (`api/schemas.py`, `routes_projects.py` — `ProjectOut.from_project`/`ReachOut.from_reach` take the catalog's `wells` dict to resolve it); the frontend plots it as a **red** `circleMarker` (vs. blue for sites). Carlson ATM's coordinates were a placeholder near the other sites at first; the user has since moved all six locations (5 sites + ATM) by hand to their real positions (visibly right along the actual creek on the basemap now). Verified the same way as the rest of Phase 4 — real browser, Playwright — 6 markers total, red one found and hoverable, clean console.
 
@@ -400,7 +436,7 @@ class Calculation(ABC):
 - **Phase 2 — done.** `models.CalculatedReading`; `calculations/base.py` (`Calculation` ABC); `calculations/water_depth.py` (formula, `bisect`-based nearest-neighbor ATM pairing, gap-threshold and no-data unknown states); `calculations/runner.py` (`compute_all()`, full-recompute-every-run simplification); a fourth SQLite table (`calculated_readings`, nullable `value`); `ingest_cli.py` now runs calculations right after ingestion. 58 passing tests (up from 43) — 15 new, covering the formula, nearest-neighbor/gap-threshold edge cases with synthetic data, NULL round-tripping, and an integration run against the real Carlson data (11 wells, 13,990 `"ok"` results, 0 `"unknown"`).
 - **Phase 3 — done.** FastAPI app (`api/app.py`, `deps.py`, `schemas.py`) and four routers covering every endpoint from §11: project tree, site summary, well metadata, well readings (raw + calculated, unified shape), ingest trigger/status, plus a health check. `catalog.load_all/find_well/find_site` and `db.count_distinct_timestamps/latest_reading_timestamp` added to support them. `serve_cli.py` (`uv run midcolumbia-serve`). 73 passing tests (up from 58) — 15 new, all against the real Carlson data via `TestClient`, plus a real running-server smoke test. One real bug caught before it reached the test suite: `/`-containing ids don't work as REST path parameters (Starlette routing, not application logic) — fixed by moving id-based lookups to query parameters, documented in §11.
 - **Phase 4 — done.** `web/` (Vite + TypeScript + Leaflet, no framework): tree pane, map pane, hover tooltips, wired to the Phase 3 API via a dev proxy. Node/npm installed as a new prerequisite. Sites 1–5 given real (user-provided, approximated/spaced) coordinates so the map has something to plot. One real bug found and fixed by actually driving the app in a browser rather than relying on `TestClient`: a SQLite thread-safety issue in `storage/db.py` that only reproduced under genuine concurrent requests (§11). Verified end-to-end with Playwright (installed ad hoc for this, no project skill existed yet) — 5 markers, correct tree, correct hover-tooltip data, clean console. **Follow-ups**: the reach-level ATM well is now on the map too, as a distinct red marker with full stats parity via a new `GET /api/wells/summary` endpoint (§11/§12); branding (favicon + header logo) added (§12). 76 passing tests (up from 73).
-- **Phase 5** — Site Management UI: add/edit/delete Project/Reach/Site/Well, backed by new CRUD endpoints.
+- **Phase 5 — done.** `management.py` (soft-delete via `.json5.deleted` rename or parent-array-entry removal, folders never renamed after creation, `json5.dumps`-based file writes); full CRUD API (`routes_projects.py`, `routes_wells.py`); `Project` dataclass gained `description`/`timezone`/`map_center_lat`/`map_center_lon`/`map_zoom`, `Project`/`Reach`/`Site` all gained `folder_path` (§5); frontend `management.ts` + `tree.ts` add/edit/delete UI via one shared `<dialog>`. Confirmed the "soft delete, don't touch data files" decision was the user's explicit call, not assumed (§11 note). 101 passing tests (up from 76) — 25 new, split between pure `management.py` unit tests (isolated `tmp_path`, never the real `data/` tree) and API-level CRUD tests. One accessibility bug caught by Playwright and fixed before shipping: hover-revealed action buttons are unclickable by both automation and keyboard/touch users alike (§12).
 - **Phase 6** — Detail data view: design (with user) + implement.
 - **Phase 7** — Polish pass: error-handling audit against CLAUDE.md's "errors must be handled, None must be handled by caller," cleanup, docs.
 
@@ -415,12 +451,16 @@ Each phase ends with passing tests before moving to the next.
 - The real Carlson dataset never exercises the `"unknown_no_atm_data"`/`"unknown_atm_gap_too_large"` paths (full ATM coverage) — worth keeping in mind if a future real project has a gap in ATM coverage, since that's the first time the "unknown" UI treatment (Phase 6) will be seen against real data rather than synthetic tests.
 - Iconography for map markers beyond "dots" — built as plain `circleMarker` dots in Phase 4, now with one bit of color coding (red = ATM, blue = site); still deferred, per Project Description, whether anything richer (per-well-type colors, status indicators) is wanted later.
 - Detail view design (Phase 6, deferred by Project Description).
-- Display units/timezone preference (store UTC + source units internally regardless; still no user-facing preference UI — not addressed in Phase 4, revisit alongside the detail view in Phase 6 or the Site Management UI in Phase 5).
+- Display units preference (`settings.json`'s `display.pressure_unit`/`temperature_unit`/`depth_unit` — store UTC + source units internally regardless) still has no editing UI anywhere (it's app-wide config, not per-project, so it wouldn't belong on the Phase 5 Project form anyway). A project's **timezone** *is* now editable, via the Phase 5 Project edit form.
 - `POST /api/ingest/run` runs synchronously in-request; fine at v1 data scale (a couple seconds for the whole real dataset) but would need to become a background job with polling/websocket status if a much larger dataset ever made a single scan take long enough to risk a request timeout.
 - `GET /api/ingest/status`'s last-run result lives in `app.state` only, not persisted — lost on server restart (§11). Revisit if "what happened on the last ingest" ever needs to survive a restart.
 - CORS origins (`localhost:5173`/`127.0.0.1:5173`) — confirmed correct now that Phase 4 actually put Vite on its default port; revisit only if a non-local deployment is ever considered (out of scope per §9).
 - `web/src/types.ts` is a hand-kept mirror of `api/schemas.py` — no shared codegen between Python and TypeScript. Fine at this size (a handful of small interfaces); worth automating (e.g. generating TS types from the FastAPI OpenAPI schema) if the API surface grows much further.
 - `map.ts`'s `FALLBACK_CENTER`/`FALLBACK_ZOOM` are hardcoded to the one real reference point we have, used only before any reach has been selected — `project.json5`'s `map.center_lat/center_lon/zoom` field (§7) still isn't wired through the API/frontend; dynamic `fitBounds` on real site coordinates does the actual work. Revisit if a project-level custom default view is ever wanted.
 - Site (and now ATM) coordinates for Carlson Creek Restoration started as an approximate, evenly-spaced placement (§7) but the user has since hand-edited all six `site.json5`/`project.json5` locations to their real positions — no longer just a placeholder.
-- No frontend automated test suite (no Vitest/Playwright test files committed) — Phase 4 was verified with type-checking (`tsc`, `vite build`) plus one ad hoc, not-committed Playwright script driven manually against a running dev server. Per CLAUDE.md's UI-verification guidance this is real "used it in a browser" verification, but it isn't repeatable via `uv run pytest`. Revisit if a `/run-skill-generator`-style committed browser check would pull its weight.
-- The default Vite favicon (a purple Vite logo) is still in place — cosmetic only, not addressed in Phase 4.
+- No frontend automated test suite (no Vitest/Playwright test files committed) — Phases 4–5 were verified with type-checking (`tsc`, `vite build`) plus ad hoc, not-committed Playwright scripts driven manually against a running dev server each time. Per CLAUDE.md's UI-verification guidance this is real "used it in a browser" verification, but it isn't repeatable via `uv run pytest`. Revisit if a `/run-skill-generator`-style committed browser check would pull its weight — it would have caught the Phase 5 hover-button accessibility bug (§12) automatically on every future change, not just because this session happened to drive it manually.
+- Folder renaming isn't supported anywhere in the Phase 5 management UI (§5's ID note) — only a display-`name` edit. A real "rename the folder too" feature still needs an actual fix for the id-orphaning problem, not just the current scope-limit.
+- No "undo delete" UI — restoring a soft-deleted entity (§11) means manually renaming the `.json5.deleted` file back or re-adding the removed array entry by hand. Fine for now since nothing is destroyed, but not a one-click recovery.
+- Editing a Well's `type` between "in_stream" and "groundwater" is allowed (unlike changing an ATM well, which is blocked outright) — deliberately, since both map to the same `WATER_PRESSURE`/`WATER_TEMPERATURE` parameters during ingestion (§6), so already-ingested rows are never misinterpreted by the change. Worth remembering if a future calculation or display ever *does* distinguish IS from GW meaningfully — this assumption would need revisiting then.
+- `Project.timezone` now exists in two places (`Project.timezone` and `Catalog.timezone`, §5) — both always sourced from the same raw field, so never actually inconsistent, but a small duplication that could be cleaned up (e.g. making `Catalog.timezone` a passthrough property) if it ever becomes confusing.
+- JSON5 writes regenerate the whole file (§11) — any comment a user hand-writes into `project.json5`/`site.json5` is replaced with the standard header the next time the management UI saves that file. Disclosed, not hidden, but worth remembering before hand-editing a file the UI also manages.

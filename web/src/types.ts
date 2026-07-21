@@ -31,6 +31,11 @@ export interface ReachOut {
 export interface ProjectOut {
   id: string;
   name: string;
+  description: string;
+  timezone: string;
+  map_center_lat: number | null;
+  map_center_lon: number | null;
+  map_zoom: number;
   reaches: ReachOut[];
 }
 
@@ -50,4 +55,37 @@ export interface SiteSummaryOut {
   latitude: number | null;
   longitude: number | null;
   wells: WellSummaryOut[];
+}
+
+// ---- Management (Phase 5) request bodies -----------------------------
+// Mirror api/schemas.py's *Write models - full-object replace, not a partial
+// PATCH merge (see that file's note on why).
+
+export interface ProjectWrite {
+  name: string;
+  description?: string;
+  timezone: string;
+  map_center_lat?: number | null;
+  map_center_lon?: number | null;
+  map_zoom?: number;
+}
+
+export interface ReachWrite {
+  name: string;
+  atm_name: string;
+  atm_device_serial?: string | null;
+  atm_latitude?: number | null;
+  atm_longitude?: number | null;
+}
+
+export interface SiteWrite {
+  name: string;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+export interface WellWrite {
+  name: string;
+  well_type: string;
+  device_serial?: string | null;
 }

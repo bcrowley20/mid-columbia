@@ -67,6 +67,21 @@ def find_site(catalogs: list[Catalog], site_id: str) -> tuple[Reach, Site] | Non
     return None
 
 
+def find_reach(catalogs: list[Catalog], reach_id: str) -> tuple[Project, Reach] | None:
+    for catalog in catalogs:
+        for reach in catalog.project.reaches:
+            if reach.id == reach_id:
+                return catalog.project, reach
+    return None
+
+
+def find_project(catalogs: list[Catalog], project_id: str) -> Project | None:
+    for catalog in catalogs:
+        if catalog.project.id == project_id:
+            return catalog.project
+    return None
+
+
 def load_catalog(data_root: Path, project_folder: str) -> Catalog:
     project_dir = data_root / project_folder
     project_file = project_dir / "project.json5"
@@ -79,8 +94,19 @@ def load_catalog(data_root: Path, project_folder: str) -> Catalog:
             _load_reach(data_root, project_dir, project_folder, project_id, reach_raw, wells)
             for reach_raw in raw.get("reaches", [])
         ]
-        project = Project(id=project_id, name=raw["name"], reaches=reaches)
         project_timezone = raw["timezone"]
+        map_raw = raw.get("map", {})
+        project = Project(
+            id=project_id,
+            name=raw["name"],
+            reaches=reaches,
+            folder_path=project_folder,
+            description=raw.get("description", ""),
+            timezone=project_timezone,
+            map_center_lat=map_raw.get("center_lat"),
+            map_center_lon=map_raw.get("center_lon"),
+            map_zoom=map_raw.get("zoom", 12),
+        )
     except KeyError as exc:
         raise CatalogError(
             f"a project.json5/site.json5 under {project_dir} is missing required field: {exc}"
@@ -134,7 +160,14 @@ def _load_reach(
             _load_site(data_root, project_folder, reach_folder, reach_id, entry, atm_well_id, atm_wells_by_name, wells)
         )
 
-    return Reach(id=reach_id, project_id=project_id, name=reach_raw["name"], atm_well_id=atm_well_id, sites=sites)
+    return Reach(
+        id=reach_id,
+        project_id=project_id,
+        name=reach_raw["name"],
+        atm_well_id=atm_well_id,
+        sites=sites,
+        folder_path=str(reach_dir.relative_to(data_root)),
+    )
 
 
 def _load_site(
@@ -195,6 +228,7 @@ def _load_site(
         latitude=raw.get("latitude"),
         longitude=raw.get("longitude"),
         wells=site_wells,
+        folder_path=str(site_dir.relative_to(data_root)),
     )
 
 

@@ -90,6 +90,11 @@ class Site:
     latitude: float | None
     longitude: float | None
     wells: list[Well]
+    # Added for Phase 5 (management writes) - relative to data/, e.g.
+    # "Carlson Creek Restoration/Lower Stream/Site 1", same convention as
+    # Well.folder_path. Lets the management module locate site.json5 to
+    # rewrite it without having to reverse-engineer a path from the id slug.
+    folder_path: str
 
 
 @dataclass
@@ -99,6 +104,8 @@ class Reach:
     name: str
     atm_well_id: str
     sites: list[Site]
+    # See Site.folder_path - e.g. "Carlson Creek Restoration/Lower Stream".
+    folder_path: str
 
 
 @dataclass
@@ -106,3 +113,15 @@ class Project:
     id: str
     name: str
     reaches: list[Reach]
+    # See Site.folder_path - the project's own folder name, e.g.
+    # "Carlson Creek Restoration" (a single path component, relative to data/).
+    folder_path: str
+    # Added for Phase 5 - project.json5's own fields (§7), needed so the
+    # management UI's edit form has something to pre-fill. `timezone` also
+    # lives on Catalog (used by the ingestion scanner) - duplicated rather
+    # than refactored, since both are always sourced from the same raw field.
+    description: str = ""
+    timezone: str = ""
+    map_center_lat: float | None = None
+    map_center_lon: float | None = None
+    map_zoom: int = 12

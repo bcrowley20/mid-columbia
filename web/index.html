@@ -15,6 +15,9 @@
       <div id="error-banner" class="banner banner-error" hidden></div>
       <div id="layout">
         <aside id="tree-pane">
+          <div id="tree-pane-header">
+            <button type="button" id="add-project-button" class="btn-add">+ Project</button>
+          </div>
           <nav id="tree" aria-label="Projects"></nav>
         </aside>
         <main id="map-pane">
@@ -23,6 +26,18 @@
         </main>
       </div>
     </div>
+
+    <dialog id="entity-dialog">
+      <form id="entity-form">
+        <h2 id="entity-dialog-title"></h2>
+        <div id="entity-dialog-fields"></div>
+        <div class="dialog-actions">
+          <button type="button" id="entity-dialog-cancel">Cancel</button>
+          <button type="submit" id="entity-dialog-submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

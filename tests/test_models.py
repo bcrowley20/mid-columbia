@@ -43,7 +43,15 @@ def test_reading_is_frozen_and_carries_provenance():
 
 
 def test_site_allows_unset_coordinates():
-    site = Site(id="site-1", reach_id="lower-stream", name="Site 1", latitude=None, longitude=None, wells=[])
+    site = Site(
+        id="site-1",
+        reach_id="lower-stream",
+        name="Site 1",
+        latitude=None,
+        longitude=None,
+        wells=[],
+        folder_path="Carlson Creek Restoration/Lower Stream/Site 1",
+    )
     assert site.latitude is None
     assert site.longitude is None
 
@@ -69,10 +77,29 @@ def test_well_hierarchy_builds():
         device_serial="22332695",
         paired_atm_well_id=None,
     )
-    site = Site(id="site-1", reach_id="lower-stream", name="Site 1", latitude=None, longitude=None, wells=[gw_well])
-    reach = Reach(id="lower-stream", project_id="carlson-creek-restoration", name="Lower Stream",
-                  atm_well_id=atm_well.id, sites=[site])
-    project = Project(id="carlson-creek-restoration", name="Carlson Creek Restoration", reaches=[reach])
+    site = Site(
+        id="site-1",
+        reach_id="lower-stream",
+        name="Site 1",
+        latitude=None,
+        longitude=None,
+        wells=[gw_well],
+        folder_path="Carlson Creek Restoration/Lower Stream/Site 1",
+    )
+    reach = Reach(
+        id="lower-stream",
+        project_id="carlson-creek-restoration",
+        name="Lower Stream",
+        atm_well_id=atm_well.id,
+        sites=[site],
+        folder_path="Carlson Creek Restoration/Lower Stream",
+    )
+    project = Project(
+        id="carlson-creek-restoration",
+        name="Carlson Creek Restoration",
+        reaches=[reach],
+        folder_path="Carlson Creek Restoration",
+    )
 
     assert project.reaches[0].sites[0].wells[0].device_serial == "22332695"
     assert project.reaches[0].atm_well_id == atm_well.id
