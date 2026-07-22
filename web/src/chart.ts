@@ -33,6 +33,7 @@ interface SeriesSpec {
 export class ChartPanel {
   private readonly panel: HTMLElement;
   private readonly titleEl: HTMLElement;
+  private readonly legendEl: HTMLElement;
   private readonly bodyEl: HTMLElement;
   private readonly waterTempCheckbox: HTMLInputElement;
   private readonly airTempCheckbox: HTMLInputElement;
@@ -44,6 +45,7 @@ export class ChartPanel {
   constructor() {
     this.panel = document.querySelector<HTMLElement>("#chart-panel")!;
     this.titleEl = document.querySelector<HTMLElement>("#chart-panel-title")!;
+    this.legendEl = document.querySelector<HTMLElement>("#chart-panel-legend")!;
     this.bodyEl = document.querySelector<HTMLElement>("#chart-panel-body")!;
     this.waterTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-water-temp")!;
     this.airTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-temp")!;
@@ -146,6 +148,12 @@ export class ChartPanel {
   }
 
   private render(specs: SeriesSpec[]): void {
+    // destroy() also detaches the legend even though it's mounted outside
+    // `bodyEl` (into the header's #chart-panel-legend) - needed here since
+    // open() can be called again, for a different site, without close() ever
+    // running first (clicking straight from one site's marker to another's).
+    this.plot?.destroy();
+    this.plot = null;
     this.bodyEl.innerHTML = "";
 
     // uPlot requires every series to share one x-axis array. Loggers don't
@@ -187,9 +195,10 @@ export class ChartPanel {
     const xMax = xs[xs.length - 1];
     this.fullRange = { min: xMin, max: xMax };
 
+    const { width, height } = this.chartSize();
     const opts: uPlot.Options = {
-      width: this.bodyEl.clientWidth,
-      height: this.bodyEl.clientHeight,
+      width,
+      height,
       series,
       scales: {
         x: { time: true },
@@ -203,6 +212,20 @@ export class ChartPanel {
       ],
       cursor: {
         drag: { x: true, y: false, uni: 20 },
+      },
+      // `live: false` drops the per-hover value column (uPlot's default
+      // "u-inline" legend already lays series out as compact horizontal
+      // chips - it's the value column that would need real width). `mount`
+      // moves the resulting table into the header strip between the site
+      // name and the temperature checkboxes, instead of uPlot's default of
+      // appending it below the chart - the panel wasn't sized to fit that,
+      // which is what was cutting off the bottom of the chart.
+      legend: {
+        live: false,
+        mount: (_u, el) => {
+          this.legendEl.innerHTML = "";
+          this.legendEl.appendChild(el);
+        },
       },
       hooks: {
         setSelect: [
@@ -221,6 +244,13 @@ export class ChartPanel {
 
     this.plot = new uPlot(opts, data as uPlot.AlignedData, this.bodyEl);
     this.attachWheelZoomAndPan(this.plot);
+
+    // The legend (mounted into the header via `legend.mount` above) can wrap
+    // onto multiple lines once it's actually populated with this site's
+    // series, growing the header - which shrinks the body area below what
+    // `chartSize()` measured before the plot existed. One corrective resize
+    // now accounts for that; window resizes are handled separately below.
+    this.resize();
   }
 
   // Wheel = zoom in/out centered on the cursor; shift+wheel = pan without
@@ -263,8 +293,23 @@ export class ChartPanel {
 
   private resize(): void {
     if (this.plot) {
-      this.plot.setSize({ width: this.bodyEl.clientWidth, height: this.bodyEl.clientHeight });
+      this.plot.setSize(this.chartSize());
     }
+  }
+
+  // `clientWidth`/`clientHeight` include #chart-panel-body's own padding,
+  // but the uPlot instance is a child placed inside that padded content box -
+  // sizing it to the full client dimensions (padding included) made it
+  // overflow the panel by exactly the padding amount, pushing content below
+  // the fold (the bug the user reported).
+  private chartSize(): { width: number; height: number } {
+    const style = getComputedStyle(this.bodyEl);
+    const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    return {
+      width: this.bodyEl.clientWidth - paddingX,
+      height: this.bodyEl.clientHeight - paddingY,
+    };
   }
 }
 

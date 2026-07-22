@@ -131,7 +131,6 @@ body {
 #chart-panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 1rem;
   padding: 0.5rem 0.9rem;
   border-bottom: 1px solid var(--color-border);
@@ -143,6 +142,36 @@ body {
   font-size: 0.95rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+#chart-panel-legend {
+  flex: 1;
+  min-width: 0;
+  /* Wraps to multiple lines first (below) - this cap plus its own scrollbar
+     is only a fallback for a site with enough wells that even wrapped chips
+     don't fit, so a hunt only ever happens inside this small strip, never on
+     the page itself. */
+  max-height: 4.6rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* uPlot's inline legend defaults to centered, block-level layout - overridden
+   to left-align and fit the header strip (see chart.ts's `legend.mount`,
+   which moves it here instead of below the chart, where it used to add
+   extra height the chart body's flex box didn't account for and pushed
+   content below the fold - reported by the user). `white-space: nowrap` is
+   scoped to each chip (`.u-series`), not the legend as a whole, so chips
+   wrap onto new lines instead of forcing one long unscrollable-looking row. */
+#chart-panel-legend .u-legend {
+  margin: 0;
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+#chart-panel-legend .u-legend .u-series {
   white-space: nowrap;
 }
 
