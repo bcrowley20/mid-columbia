@@ -1,0 +1,10 @@
+# Without this, git's own binary-detection heuristic is the only thing
+# stopping these from being treated as text and CRLF-mangled on checkout -
+# usually reliable, but not guaranteed, and for .xlsx specifically (a zip
+# archive openpyxl parses byte-for-byte) any mangling would silently corrupt
+# every IS well's real data. Matters most for a Windows clone, where
+# core.autocrlf=true is git's own recommended default.
+*.xlsx binary
+*.hobo binary
+*.png binary
+*.webp binary
