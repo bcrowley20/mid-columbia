@@ -65,18 +65,26 @@ class _ColumnMap:
         return sign * timedelta(hours=hours, minutes=minutes)
 
 
+_DEVICE_SERIAL_RE = re.compile(r"LGR S/N:\s*(\w+)")
+
+
 class HoboWareCsvHandler(LoggerHandler):
     name = "hoboware_csv"
 
     def can_handle(self, path: Path) -> bool:
         return path.suffix.lower() == ".csv"
 
+    def extract_device_serial(self, path: Path) -> str:
+        header = self._header_row(self._read_rows(path), path)
+        match = _DEVICE_SERIAL_RE.search(",".join(header))
+        if not match:
+            raise ParseError(f"could not find a device serial number (LGR S/N) in header: {header}")
+        return match.group(1)
+
     def parse(
         self, path: Path, well_id: str, well_type: WellType, timezone: str
     ) -> tuple[list[Reading], list[DeploymentEvent]]:
-        with path.open("r", encoding="utf-8-sig", newline="") as f:
-            rows = list(csv.reader(f))
-
+        rows = self._read_rows(path)
         if not rows:
             return [], []
 
@@ -135,3 +143,17 @@ class HoboWareCsvHandler(LoggerHandler):
                 )
 
         return readings, events
+
+    @staticmethod
+    def _read_rows(path: Path) -> list[list[str]]:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            return list(csv.reader(f))
+
+    @staticmethod
+    def _header_row(rows: list[list[str]], path: Path) -> list[str]:
+        if not rows:
+            raise ParseError(f"{path.name} is empty")
+        start = 1 if rows[0] and rows[0][0].startswith("Plot Title") else 0
+        if start >= len(rows):
+            raise ParseError(f"{path.name} has no header row")
+        return rows[start]

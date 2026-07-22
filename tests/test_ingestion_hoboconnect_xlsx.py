@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+from midcolumbia.ingestion.base import ParseError
 from midcolumbia.ingestion.hoboconnect_xlsx import HoboConnectXlsxHandler
 from midcolumbia.models import ParameterType, WellType
 
@@ -77,3 +80,22 @@ def test_can_handle_only_xlsx(data_root: Path):
     assert handler.can_handle(Path("foo.xlsx")) is True
     assert handler.can_handle(Path("foo.csv")) is False
     assert handler.can_handle(Path("foo.hobo")) is False
+
+
+def test_extract_device_serial_reads_details_sheet(data_root: Path):
+    # IS 1's site.json5 config also has device_serial "22449416" (test_catalog.py)
+    # - this is the Add Data importer's routing key, read straight from the file.
+    path = _is1_file(data_root, "Site1, #8, 22449416 2026-02-27 16_58_14 PST (Data PST).xlsx")
+    assert HoboConnectXlsxHandler().extract_device_serial(path) == "22449416"
+
+
+def test_extract_device_serial_raises_without_details_sheet(tmp_path: Path):
+    import openpyxl
+
+    path = tmp_path / "no_details.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["Date-Time (PST/PDT)", "Temperature , °C"])
+    workbook.save(path)
+
+    with pytest.raises(ParseError):
+        HoboConnectXlsxHandler().extract_device_serial(path)

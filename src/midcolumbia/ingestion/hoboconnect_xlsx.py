@@ -95,6 +95,21 @@ class HoboConnectXlsxHandler(LoggerHandler):
     def can_handle(self, path: Path) -> bool:
         return path.suffix.lower() == ".xlsx"
 
+    def extract_device_serial(self, path: Path) -> str:
+        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            if "Details" not in workbook.sheetnames:
+                raise ParseError(f"{path.name} has no 'Details' sheet (found: {workbook.sheetnames})")
+            for row in workbook["Details"].iter_rows(values_only=True):
+                for i, cell in enumerate(row):
+                    if cell == "Serial Number":
+                        for value in row[i + 1 :]:
+                            if value is not None:
+                                return str(value)
+            raise ParseError(f"{path.name}: Details sheet has no 'Serial Number' row")
+        finally:
+            workbook.close()
+
     def parse(
         self, path: Path, well_id: str, well_type: WellType, timezone: str
     ) -> tuple[list[Reading], list[DeploymentEvent]]:

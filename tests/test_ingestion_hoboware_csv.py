@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+from midcolumbia.ingestion.base import ParseError
 from midcolumbia.ingestion.hoboware_csv import HoboWareCsvHandler
 from midcolumbia.models import ParameterType, WellType
 
@@ -58,6 +61,27 @@ def test_atmospheric_well_type_maps_to_air_parameters(data_root: Path):
     assert readings
     assert {r.parameter for r in readings} == {ParameterType.AIR_PRESSURE, ParameterType.AIR_TEMPERATURE}
     assert all(r.well_id == atm_id for r in readings)
+
+
+def test_extract_device_serial_reads_lgr_sn_from_header(data_root: Path):
+    # GW 1's site.json5 config also has device_serial "22332695" (test_catalog.py)
+    # - this is the Add Data importer's routing key, read straight from the file.
+    path = _gw1_file(data_root, "2026-02-27, GW_Site_1,_ID_2,_22332695.csv")
+    assert HoboWareCsvHandler().extract_device_serial(path) == "22332695"
+
+
+def test_extract_device_serial_raises_on_unreadable_file(tmp_path: Path):
+    path = tmp_path / "not_a_hobo_file.csv"
+    path.write_text("just,some,random,csv\n1,2,3,4\n", encoding="utf-8")
+    with pytest.raises(ParseError):
+        HoboWareCsvHandler().extract_device_serial(path)
+
+
+def test_extract_device_serial_raises_on_empty_file(tmp_path: Path):
+    path = tmp_path / "empty.csv"
+    path.write_text("", encoding="utf-8")
+    with pytest.raises(ParseError):
+        HoboWareCsvHandler().extract_device_serial(path)
 
 
 def test_readings_are_contiguous_and_non_overlapping_across_downloads(data_root: Path):

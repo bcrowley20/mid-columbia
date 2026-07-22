@@ -150,6 +150,21 @@ class IngestStatusOut(BaseModel):
     result: IngestRunOut | None = None
 
 
+class UploadFileResultOut(BaseModel):
+    filename: str
+    status: str  # "ingested" | "error"
+    well_id: str | None = None
+    well_name: str | None = None
+    message: str | None = None  # error detail, or None on success
+
+
+class IngestUploadOut(BaseModel):
+    files: list[UploadFileResultOut]
+    # None only when every file errored out - nothing was placed, so there
+    # was nothing worth re-scanning.
+    ingest: IngestRunOut | None = None
+
+
 # ---- Management (Phase 5) request bodies ----------------------------------
 # Create/Update share the same shape for every entity here (full-object
 # replace, not a partial PATCH merge) - simpler to reason about than merge

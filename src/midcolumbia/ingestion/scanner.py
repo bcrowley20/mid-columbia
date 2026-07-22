@@ -43,7 +43,7 @@ def scan_all(
                 if not file_path.is_file():
                     continue
 
-                handler = _find_handler(active_handlers, file_path)
+                handler = find_handler(active_handlers, file_path)
                 if handler is None:
                     continue  # e.g. .hobo files, or a disabled handler's format
 
@@ -74,7 +74,10 @@ def scan_all(
     return result
 
 
-def _find_handler(handlers: list[LoggerHandler], path: Path) -> LoggerHandler | None:
+def find_handler(handlers: list[LoggerHandler], path: Path) -> LoggerHandler | None:
+    """Public (not just scan_all's own helper) since the Add Data upload
+    route (api/routes_ingest.py) needs the same extension-based dispatch
+    before a file has a well_id to be scanned under."""
     for handler in handlers:
         if handler.can_handle(path):
             return handler

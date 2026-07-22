@@ -1,11 +1,11 @@
 import "./style.css";
 
-import { fetchProjects } from "./api";
+import { fetchProjects, uploadIngestFiles } from "./api";
 import { ChartPanel } from "./chart";
 import * as mgmt from "./management";
 import { SiteMap } from "./map";
 import { renderTree } from "./tree";
-import type { ProjectOut, ReachOut, SiteOut, WellOut } from "./types";
+import type { IngestUploadOut, ProjectOut, ReachOut, SiteOut, WellOut } from "./types";
 
 let selectedReachId: string | null = null;
 let siteMap: SiteMap;
@@ -29,7 +29,41 @@ async function main(): Promise<void> {
     mgmt.openCreateProjectDialog(refresh);
   });
 
+  const addDataButton = document.querySelector<HTMLButtonElement>("#add-data-button")!;
+  const addDataInput = document.querySelector<HTMLInputElement>("#add-data-input")!;
+  addDataButton.addEventListener("click", () => addDataInput.click());
+  addDataInput.addEventListener("change", () => {
+    // input.files is a *live* FileList tied to the input - copy it to a
+    // plain array before clearing .value below, or clearing wipes this
+    // same reference out from under handleAddData too (a real bug caught
+    // by driving this in an actual browser rather than trusting the types).
+    const files = Array.from(addDataInput.files ?? []);
+    addDataInput.value = ""; // so re-selecting the same file(s) still fires "change"
+    if (files.length > 0) handleAddData(addDataButton, files);
+  });
+
   await refresh();
+}
+
+function handleAddData(button: HTMLButtonElement, files: File[]): void {
+  button.disabled = true;
+  uploadIngestFiles(files)
+    .then((result) => {
+      alert(summarizeUpload(result));
+      return refresh();
+    })
+    .catch((err: unknown) => {
+      alert(err instanceof Error ? err.message : String(err));
+    })
+    .finally(() => {
+      button.disabled = false;
+    });
+}
+
+function summarizeUpload(result: IngestUploadOut): string {
+  return result.files
+    .map((f) => (f.status === "ingested" ? `${f.filename}: added to ${f.well_name}` : `${f.filename}: ${f.message}`))
+    .join("\n");
 }
 
 async function refresh(): Promise<void> {

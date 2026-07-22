@@ -50,6 +50,20 @@ body {
   font-weight: 600;
 }
 
+#app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* .btn-add's `width: 100%` is sized for the sidebar's full-width "+ Project"
+   button - here it's one of several items in a flex row, so it needs its
+   own content-sized width instead of stretching to fill the header. */
+#add-data-button {
+  width: auto;
+  padding: 0.4rem 0.9rem;
+}
+
 #app-logo {
   height: 40px;
   width: auto;

@@ -1,4 +1,5 @@
 import type {
+  IngestUploadOut,
   ProjectOut,
   ProjectWrite,
   ReachOut,
@@ -62,6 +63,21 @@ export function fetchWellReadings(wellId: string, parameter: string, from?: Date
   const params = new URLSearchParams({ well_id: wellId, parameter });
   if (from) params.set("from", from.toISOString());
   return getJson(`${API_BASE}/wells/readings?${params}`);
+}
+
+// Add Data importer (main.ts) - a multipart upload, not JSON, so this can't
+// go through sendJson: the browser has to set its own Content-Type with the
+// multipart boundary, which happens automatically as long as fetch's body is
+// a FormData and no Content-Type header is set explicitly here.
+export function uploadIngestFiles(files: FileList | File[]): Promise<IngestUploadOut> {
+  const body = new FormData();
+  for (const file of files) body.append("files", file);
+  return sendMultipart(`${API_BASE}/ingest/upload`, body);
+}
+
+async function sendMultipart<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(path, { method: "POST", body });
+  return handleResponse<T>(response, path);
 }
 
 // ---- Project management ------------------------------------------------

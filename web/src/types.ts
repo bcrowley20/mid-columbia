@@ -104,3 +104,30 @@ export interface WellWrite {
   well_type: string;
   device_serial?: string | null;
 }
+
+// ---- Ingest / Add Data importer -------------------------------------------
+
+export interface IngestRunOut {
+  ran_at: string;
+  files_scanned: number;
+  files_ingested: number;
+  readings_ingested: number;
+  events_ingested: number;
+  errors: string[];
+  wells_processed: number;
+  calculations_ok: number;
+  calculations_unknown: number;
+}
+
+export interface UploadFileResultOut {
+  filename: string;
+  status: string; // "ingested" | "error"
+  well_id: string | null;
+  well_name: string | null;
+  message: string | null;
+}
+
+export interface IngestUploadOut {
+  files: UploadFileResultOut[];
+  ingest: IngestRunOut | null;
+}

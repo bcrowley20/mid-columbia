@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.139.2",
     "json5>=0.9.25",
     "openpyxl>=3.1.5",
+    "python-multipart>=0.0.20",
     "tzdata>=2026.3",
     "uvicorn>=0.51.0",
 ]

@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from midcolumbia.catalog import CatalogError, discover_project_folders, find_project, find_reach, load_catalog
+from midcolumbia.catalog import (
+    CatalogError,
+    discover_project_folders,
+    find_project,
+    find_reach,
+    find_well_by_device_serial,
+    load_catalog,
+)
 from midcolumbia.models import WellType
 
 
@@ -90,6 +97,20 @@ def test_find_reach_and_find_project(data_root: Path):
     assert project is not None
     assert project.name == "Carlson Creek Restoration"
     assert find_project([catalog], "nonexistent") is None
+
+
+def test_find_well_by_device_serial(data_root: Path):
+    catalog = load_catalog(data_root, "Carlson Creek Restoration")
+
+    gw1 = find_well_by_device_serial([catalog], "22332695")
+    assert gw1 is not None
+    assert gw1.id == "carlson-creek-restoration/lower-stream/site-1/gw-1"
+
+    atm = find_well_by_device_serial([catalog], "22332694")
+    assert atm is not None
+    assert atm.well_type is WellType.ATMOSPHERIC
+
+    assert find_well_by_device_serial([catalog], "nonexistent-serial") is None
 
 
 def test_missing_project_json5_raises(tmp_path: Path):

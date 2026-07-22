@@ -58,6 +58,20 @@ def find_well(catalogs: list[Catalog], well_id: str) -> Well | None:
     return None
 
 
+def find_well_by_device_serial(catalogs: list[Catalog], serial: str) -> Well | None:
+    """Looks up the well currently configured with this device serial - the
+    routing key the Add Data importer uses to place an uploaded file without
+    the user having to pick a well by hand. Only ever matches a well's
+    *current* device_serial (site.json5/project.json5), so a file from a
+    since-replaced device with a stale serial won't match - by design, see
+    the Add Data importer's "let the user know" error path."""
+    for catalog in catalogs:
+        for well in catalog.wells.values():
+            if well.device_serial == serial:
+                return well
+    return None
+
+
 def find_site(catalogs: list[Catalog], site_id: str) -> tuple[Reach, Site] | None:
     for catalog in catalogs:
         for reach in catalog.project.reaches:
