@@ -247,6 +247,21 @@ body {
   padding: 0.5rem 0.9rem;
 }
 
+.chart-point-tip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 6px));
+  background: var(--color-surface);
+  border: 1.5px solid;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
 #chart-panel-empty {
   color: var(--color-text-muted);
   font-size: 0.85rem;

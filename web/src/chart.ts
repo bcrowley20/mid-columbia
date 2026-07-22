@@ -195,6 +195,14 @@ export class ChartPanel {
     const xMax = xs[xs.length - 1];
     this.fullRange = { min: xMin, max: xMax };
 
+    // One small floating label per series, positioned exactly at that
+    // series' own point for the hovered timestamp (`setCursor` hook below) -
+    // "little tips at each of the intersection points," per the user, rather
+    // than one aggregate box or relying on uPlot's default legend values
+    // (which only ever live in the header now, disconnected from where the
+    // cursor actually is on the chart).
+    const tipEls = specs.map((spec) => this.createTipEl(spec.color));
+
     const { width, height } = this.chartSize();
     const opts: uPlot.Options = {
       width,
@@ -238,12 +246,31 @@ export class ChartPanel {
             }
           },
         ],
+        setCursor: [
+          (u) => {
+            const idx = u.cursor.idx;
+            specs.forEach((spec, i) => {
+              const seriesIdx = i + 1;
+              const el = tipEls[i];
+              const val = idx == null ? null : (u.data[seriesIdx][idx] as number | null);
+              if (val == null || !u.series[seriesIdx].show) {
+                el.style.display = "none";
+                return;
+              }
+              el.style.display = "block";
+              el.style.left = `${u.valToPos(u.data[0][idx!] as number, "x")}px`;
+              el.style.top = `${u.valToPos(val, spec.scale)}px`;
+              el.textContent = `${val.toFixed(spec.scale === "depth" ? 2 : 1)} ${spec.unit}`;
+            });
+          },
+        ],
       },
       data: data as uPlot.AlignedData,
     };
 
     this.plot = new uPlot(opts, data as uPlot.AlignedData, this.bodyEl);
     this.attachWheelZoomAndPan(this.plot);
+    tipEls.forEach((el) => this.plot!.over.appendChild(el));
 
     // The legend (mounted into the header via `legend.mount` above) can wrap
     // onto multiple lines once it's actually populated with this site's
@@ -288,6 +315,15 @@ export class ChartPanel {
       { passive: false },
     );
     u.over.addEventListener("dblclick", () => this.resetZoom());
+  }
+
+  private createTipEl(color: string): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "chart-point-tip";
+    el.style.display = "none";
+    el.style.borderColor = color;
+    el.style.color = color;
+    return el;
   }
 
   private resetZoom(): void {
