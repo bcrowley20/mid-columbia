@@ -11,11 +11,17 @@ import type { ReachOut, SiteOut, WellOut } from "./types";
 
 const HOUR_SECONDS = 3600;
 
-// Base color per well type, with extra shades if a site has more than one
-// well of the same type - matches the blue/red site/ATM marker convention
-// already used on the map (map.ts), extended with a green family for IS.
-const GW_SHADES = ["#2563eb", "#1d4ed8", "#3b82f6"];
-const IS_SHADES = ["#059669", "#047857", "#10b981"];
+// Base color per well type - index 0 is what a site with only one well of
+// that type gets (matches the blue/red site/ATM marker convention already
+// used on the map, map.ts). A site with more than one well of the same type
+// (e.g. Carlson's Site 3, two GW wells) cycles through the rest of the array
+// for that well's depth *and* temperature lines - deliberately spread across
+// dark/base/light rather than adjacent mid-tones (the original three blues
+// here were all close enough in lightness that two wells still read as "the
+// same blue" at a glance, per the user - these are chosen to be told apart
+// without needing the legend.
+const GW_SHADES = ["#2563eb", "#1e3a8a", "#38bdf8"]; // royal blue, navy, sky
+const IS_SHADES = ["#059669", "#14532d", "#4ade80"]; // emerald, forest, light green
 const ATM_COLOR = "#dc2626";
 
 interface SeriesSpec {
