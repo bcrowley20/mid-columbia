@@ -55,11 +55,13 @@ export class ChartPanel {
   private readonly waterTempCheckbox: HTMLInputElement;
   private readonly waterPressureCheckbox: HTMLInputElement;
   private readonly airTempCheckbox: HTMLInputElement;
+  private readonly airPressureCheckbox: HTMLInputElement;
   private plot: uPlot | null = null;
   private fullRange: { min: number; max: number } | null = null;
   private waterTempIndices: number[] = [];
   private waterPressureIndices: number[] = [];
   private airTempIndex: number | null = null;
+  private airPressureIndex: number | null = null;
 
   constructor() {
     this.panel = document.querySelector<HTMLElement>("#chart-panel")!;
@@ -70,6 +72,7 @@ export class ChartPanel {
     this.waterTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-water-temp")!;
     this.waterPressureCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-water-pressure")!;
     this.airTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-temp")!;
+    this.airPressureCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-pressure")!;
 
     document.querySelector<HTMLButtonElement>("#chart-panel-close")!.addEventListener("click", () => this.close());
     document.querySelector<HTMLButtonElement>("#chart-reset-zoom")!.addEventListener("click", () => this.resetZoom());
@@ -83,6 +86,11 @@ export class ChartPanel {
     });
     this.airTempCheckbox.addEventListener("change", () => {
       if (this.airTempIndex !== null) this.plot?.setSeries(this.airTempIndex, { show: this.airTempCheckbox.checked });
+    });
+    this.airPressureCheckbox.addEventListener("change", () => {
+      if (this.airPressureIndex !== null) {
+        this.plot?.setSeries(this.airPressureIndex, { show: this.airPressureCheckbox.checked });
+      }
     });
     window.addEventListener("resize", () => this.resize());
   }
@@ -100,6 +108,7 @@ export class ChartPanel {
     this.waterTempCheckbox.checked = false;
     this.waterPressureCheckbox.checked = false;
     this.airTempCheckbox.checked = false;
+    this.airPressureCheckbox.checked = false;
     this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
 
     const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
@@ -119,10 +128,12 @@ export class ChartPanel {
     const atmSeries = await this.fetchAtmSeries(reach.atm_well, yearStart);
 
     const depthSeries = wellSeries.map((w) => w.depth).filter((s) => s.points.size > 0);
-    const tempSeries = [...wellSeries.map((w) => w.temp), ...(atmSeries ? [atmSeries] : [])].filter(
+    const tempSeries = [...wellSeries.map((w) => w.temp), ...(atmSeries.temp ? [atmSeries.temp] : [])].filter(
       (s) => s.points.size > 0,
     );
-    const pressureSeries = wellSeries.map((w) => w.pressure).filter((s) => s.points.size > 0);
+    const pressureSeries = [...wellSeries.map((w) => w.pressure), ...(atmSeries.pressure ? [atmSeries.pressure] : [])].filter(
+      (s) => s.points.size > 0,
+    );
 
     if (depthSeries.length === 0 && tempSeries.length === 0 && pressureSeries.length === 0) {
       this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this site's wells yet.</div>`;
@@ -220,17 +231,39 @@ export class ChartPanel {
     };
   }
 
-  private async fetchAtmSeries(atmWell: WellOut, from: Date): Promise<SeriesSpec | null> {
-    const result = await fetchWellReadings(atmWell.id, "air_temperature", from);
-    if (result.points.length === 0) return null;
+  private async fetchAtmSeries(
+    atmWell: WellOut,
+    from: Date,
+  ): Promise<{ temp: SeriesSpec | null; pressure: SeriesSpec | null }> {
+    const [tempResult, pressureResult] = await Promise.all([
+      fetchWellReadings(atmWell.id, "air_temperature", from),
+      fetchWellReadings(atmWell.id, "air_pressure", from),
+    ]);
     return {
-      label: `${atmWell.name} air temp`,
-      color: ATM_COLOR,
-      scale: "temp",
-      dash: [2, 3],
-      show: false,
-      unit: result.points[0]?.unit ?? "°F",
-      points: toPointMap(result.points),
+      temp:
+        tempResult.points.length === 0
+          ? null
+          : {
+              label: `${atmWell.name} air temp`,
+              color: ATM_COLOR,
+              scale: "temp",
+              dash: [2, 3],
+              show: false,
+              unit: tempResult.points[0]?.unit ?? "°F",
+              points: toPointMap(tempResult.points),
+            },
+      pressure:
+        pressureResult.points.length === 0
+          ? null
+          : {
+              label: `${atmWell.name} air pressure`,
+              color: ATM_COLOR,
+              scale: "pressure",
+              dash: [2, 3],
+              show: false,
+              unit: pressureResult.points[0]?.unit ?? "kPa",
+              points: toPointMap(pressureResult.points),
+            },
     };
   }
 
@@ -256,13 +289,15 @@ export class ChartPanel {
     this.waterTempIndices = [];
     this.waterPressureIndices = [];
     this.airTempIndex = null;
+    this.airPressureIndex = null;
     specs.forEach((spec, i) => {
       const seriesIdx = i + 1;
       if (spec.scale === "temp") {
         if (spec.color === ATM_COLOR) this.airTempIndex = seriesIdx;
         else this.waterTempIndices.push(seriesIdx);
-      } else if (spec.scale === "pressure" && spec.color !== ATM_COLOR) {
-        this.waterPressureIndices.push(seriesIdx);
+      } else if (spec.scale === "pressure") {
+        if (spec.color === ATM_COLOR) this.airPressureIndex = seriesIdx;
+        else this.waterPressureIndices.push(seriesIdx);
       }
     });
 
