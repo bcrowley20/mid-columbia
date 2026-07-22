@@ -2,7 +2,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { fetchSiteSummary, fetchWellSummary } from "./api";
-import type { ReachOut, SiteSummaryOut, WellSummaryOut } from "./types";
+import type { ReachOut, SiteSummaryOut, WellOut, WellSummaryOut } from "./types";
 
 // No default view configured yet (project.json5's map.center/zoom isn't wired
 // through the API - Phase 4 uses fitBounds on real site coordinates instead,
@@ -20,14 +20,17 @@ export class SiteMap {
   private readonly markersLayer: L.LayerGroup;
   private readonly emptyStateEl: HTMLElement;
   private readonly onSelectSite: (reach: ReachOut, site: ReachOut["sites"][number]) => void;
+  private readonly onSelectAtm: (reach: ReachOut, atmWell: WellOut) => void;
 
   constructor(
     container: HTMLElement,
     emptyStateEl: HTMLElement,
     onSelectSite: (reach: ReachOut, site: ReachOut["sites"][number]) => void,
+    onSelectAtm: (reach: ReachOut, atmWell: WellOut) => void,
   ) {
     this.emptyStateEl = emptyStateEl;
     this.onSelectSite = onSelectSite;
+    this.onSelectAtm = onSelectAtm;
     this.map = L.map(container).setView(FALLBACK_CENTER, FALLBACK_ZOOM);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -76,6 +79,7 @@ export class SiteMap {
 
       const marker = L.circleMarker(latLng, ATM_MARKER_STYLE);
       marker.bindTooltip(renderAtmPopup(reach.name, atmSummary), { direction: "top", offset: [0, -8] });
+      marker.on("click", () => this.onSelectAtm(reach, atmWell));
       marker.addTo(this.markersLayer);
     }
 

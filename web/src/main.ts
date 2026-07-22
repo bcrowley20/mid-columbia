@@ -5,7 +5,7 @@ import { ChartPanel } from "./chart";
 import * as mgmt from "./management";
 import { SiteMap } from "./map";
 import { renderTree } from "./tree";
-import type { ProjectOut, ReachOut, SiteOut } from "./types";
+import type { ProjectOut, ReachOut, SiteOut, WellOut } from "./types";
 
 let selectedReachId: string | null = null;
 let siteMap: SiteMap;
@@ -15,11 +15,15 @@ function onSelectSite(reach: ReachOut, site: SiteOut): void {
   chartPanel.open(reach, site).catch((err: unknown) => console.error(err));
 }
 
+function onSelectAtm(reach: ReachOut, atmWell: WellOut): void {
+  chartPanel.openAtm(reach, atmWell).catch((err: unknown) => console.error(err));
+}
+
 async function main(): Promise<void> {
   const mapContainer = document.querySelector<HTMLElement>("#map")!;
   const emptyStateEl = document.querySelector<HTMLElement>("#map-empty-state")!;
   chartPanel = new ChartPanel();
-  siteMap = new SiteMap(mapContainer, emptyStateEl, onSelectSite);
+  siteMap = new SiteMap(mapContainer, emptyStateEl, onSelectSite, onSelectAtm);
 
   document.querySelector<HTMLButtonElement>("#add-project-button")!.addEventListener("click", () => {
     mgmt.openCreateProjectDialog(refresh);

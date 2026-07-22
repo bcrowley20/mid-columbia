@@ -195,6 +195,20 @@ body {
   flex-shrink: 0;
 }
 
+#chart-panel-toggles {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+/* Same specificity trap as #chart-panel[hidden] above: this rule's id
+   selector otherwise outranks the browser's `[hidden] { display: none }`
+   default, so ChartPanel.openAtm()'s togglesEl.hidden = true would do
+   nothing visually without this override. */
+#chart-panel-toggles[hidden] {
+  display: none;
+}
+
 #chart-panel-controls label {
   display: flex;
   align-items: center;

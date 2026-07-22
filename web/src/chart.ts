@@ -27,7 +27,7 @@ const ATM_COLOR = "#dc2626";
 interface SeriesSpec {
   label: string;
   color: string;
-  scale: "depth" | "temp";
+  scale: "depth" | "temp" | "pressure";
   dash?: number[];
   show: boolean;
   // Raw (timestamp epoch seconds -> value) points, before alignment to the
@@ -36,16 +36,29 @@ interface SeriesSpec {
   unit: string;
 }
 
+// Left-to-right precedence for the non-x axes actually present in a given
+// render() call - a chart never declares an axis for a scale nobody plotted
+// (e.g. the ATM-only view from openAtm() has no "depth" series at all, so no
+// empty "Depth" axis should reserve space for it).
+const AXIS_SPECS: { scale: SeriesSpec["scale"]; side: 1 | 3; label: string; defaultUnit: string }[] = [
+  { scale: "depth", side: 3, label: "Depth", defaultUnit: "ft" },
+  { scale: "temp", side: 1, label: "Temperature", defaultUnit: "°F" },
+  { scale: "pressure", side: 1, label: "Pressure", defaultUnit: "kPa" },
+];
+
 export class ChartPanel {
   private readonly panel: HTMLElement;
   private readonly titleEl: HTMLElement;
   private readonly legendEl: HTMLElement;
   private readonly bodyEl: HTMLElement;
+  private readonly togglesEl: HTMLElement;
   private readonly waterTempCheckbox: HTMLInputElement;
+  private readonly waterPressureCheckbox: HTMLInputElement;
   private readonly airTempCheckbox: HTMLInputElement;
   private plot: uPlot | null = null;
   private fullRange: { min: number; max: number } | null = null;
   private waterTempIndices: number[] = [];
+  private waterPressureIndices: number[] = [];
   private airTempIndex: number | null = null;
 
   constructor() {
@@ -53,13 +66,20 @@ export class ChartPanel {
     this.titleEl = document.querySelector<HTMLElement>("#chart-panel-title")!;
     this.legendEl = document.querySelector<HTMLElement>("#chart-panel-legend")!;
     this.bodyEl = document.querySelector<HTMLElement>("#chart-panel-body")!;
+    this.togglesEl = document.querySelector<HTMLElement>("#chart-panel-toggles")!;
     this.waterTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-water-temp")!;
+    this.waterPressureCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-water-pressure")!;
     this.airTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-temp")!;
 
     document.querySelector<HTMLButtonElement>("#chart-panel-close")!.addEventListener("click", () => this.close());
     document.querySelector<HTMLButtonElement>("#chart-reset-zoom")!.addEventListener("click", () => this.resetZoom());
     this.waterTempCheckbox.addEventListener("change", () => {
       for (const idx of this.waterTempIndices) this.plot?.setSeries(idx, { show: this.waterTempCheckbox.checked });
+    });
+    this.waterPressureCheckbox.addEventListener("change", () => {
+      for (const idx of this.waterPressureIndices) {
+        this.plot?.setSeries(idx, { show: this.waterPressureCheckbox.checked });
+      }
     });
     this.airTempCheckbox.addEventListener("change", () => {
       if (this.airTempIndex !== null) this.plot?.setSeries(this.airTempIndex, { show: this.airTempCheckbox.checked });
@@ -76,7 +96,9 @@ export class ChartPanel {
   async open(reach: ReachOut, site: SiteOut): Promise<void> {
     this.panel.hidden = false;
     this.titleEl.textContent = `${reach.name} › ${site.name}`;
+    this.togglesEl.hidden = false;
     this.waterTempCheckbox.checked = false;
+    this.waterPressureCheckbox.checked = false;
     this.airTempCheckbox.checked = false;
     this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
 
@@ -100,23 +122,73 @@ export class ChartPanel {
     const tempSeries = [...wellSeries.map((w) => w.temp), ...(atmSeries ? [atmSeries] : [])].filter(
       (s) => s.points.size > 0,
     );
+    const pressureSeries = wellSeries.map((w) => w.pressure).filter((s) => s.points.size > 0);
 
-    if (depthSeries.length === 0 && tempSeries.length === 0) {
+    if (depthSeries.length === 0 && tempSeries.length === 0 && pressureSeries.length === 0) {
       this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this site's wells yet.</div>`;
       return;
     }
 
-    this.render([...depthSeries, ...tempSeries]);
+    this.render([...depthSeries, ...tempSeries, ...pressureSeries]);
+  }
+
+  // Reach.atm_well isn't part of any Site, so it has no chart entry point
+  // through open() above - clicking its own marker on the map (map.ts) is
+  // the only way in. There's no depth (no paired well to derive it from) and
+  // only ever these two raw series, so both are shown by default rather than
+  // gated behind the site view's toggles - see the togglesEl.hidden below.
+  async openAtm(reach: ReachOut, atmWell: WellOut): Promise<void> {
+    this.panel.hidden = false;
+    this.titleEl.textContent = `${reach.name} › ${atmWell.name} (atmospheric reference)`;
+    this.togglesEl.hidden = true;
+    this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
+
+    const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+    const [tempResult, pressureResult] = await Promise.all([
+      fetchWellReadings(atmWell.id, "air_temperature", yearStart),
+      fetchWellReadings(atmWell.id, "air_pressure", yearStart),
+    ]);
+
+    const specs: SeriesSpec[] = [];
+    if (tempResult.points.length > 0) {
+      specs.push({
+        label: `${atmWell.name} air temp`,
+        color: ATM_COLOR,
+        scale: "temp",
+        show: true,
+        unit: tempResult.points[0]?.unit ?? "°F",
+        points: toPointMap(tempResult.points),
+      });
+    }
+    if (pressureResult.points.length > 0) {
+      specs.push({
+        label: `${atmWell.name} air pressure`,
+        color: ATM_COLOR,
+        scale: "pressure",
+        dash: [6, 4],
+        show: true,
+        unit: pressureResult.points[0]?.unit ?? "kPa",
+        points: toPointMap(pressureResult.points),
+      });
+    }
+
+    if (specs.length === 0) {
+      this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this atmospheric well yet.</div>`;
+      return;
+    }
+
+    this.render(specs);
   }
 
   private async fetchWellSeries(
     well: WellOut,
     color: string,
     from: Date,
-  ): Promise<{ depth: SeriesSpec; temp: SeriesSpec }> {
-    const [depthResult, tempResult] = await Promise.all([
+  ): Promise<{ depth: SeriesSpec; temp: SeriesSpec; pressure: SeriesSpec }> {
+    const [depthResult, tempResult, pressureResult] = await Promise.all([
       fetchWellReadings(well.id, "water_depth", from),
       fetchWellReadings(well.id, "water_temperature", from),
+      fetchWellReadings(well.id, "water_pressure", from),
     ]);
     return {
       depth: {
@@ -135,6 +207,15 @@ export class ChartPanel {
         show: false,
         unit: tempResult.points[0]?.unit ?? "°F",
         points: toPointMap(tempResult.points),
+      },
+      pressure: {
+        label: `${well.name} pressure`,
+        color,
+        scale: "pressure",
+        dash: [2, 2],
+        show: false,
+        unit: pressureResult.points[0]?.unit ?? "kPa",
+        points: toPointMap(pressureResult.points),
       },
     };
   }
@@ -173,16 +254,22 @@ export class ChartPanel {
     const data: (number | null)[][] = [xs, ...specs.map((spec) => grid.map((t) => spec.points.get(t) ?? null))];
 
     this.waterTempIndices = [];
+    this.waterPressureIndices = [];
     this.airTempIndex = null;
     specs.forEach((spec, i) => {
+      const seriesIdx = i + 1;
       if (spec.scale === "temp") {
-        if (spec.color === ATM_COLOR) this.airTempIndex = i + 1;
-        else this.waterTempIndices.push(i + 1);
+        if (spec.color === ATM_COLOR) this.airTempIndex = seriesIdx;
+        else this.waterTempIndices.push(seriesIdx);
+      } else if (spec.scale === "pressure" && spec.color !== ATM_COLOR) {
+        this.waterPressureIndices.push(seriesIdx);
       }
     });
 
-    const depthUnit = specs.find((s) => s.scale === "depth")?.unit ?? "ft";
-    const tempUnit = specs.find((s) => s.scale === "temp")?.unit ?? "°F";
+    // Only declare an axis (and its scale) for a series kind actually present
+    // in this render - e.g. openAtm()'s chart has no "depth" series at all,
+    // so no empty Depth axis should reserve space on the left.
+    const presentAxes = AXIS_SPECS.filter((a) => specs.some((s) => s.scale === a.scale));
 
     const series: uPlot.Series[] = [
       {},
@@ -216,13 +303,20 @@ export class ChartPanel {
       series,
       scales: {
         x: { time: true },
-        depth: {},
-        temp: {},
+        ...Object.fromEntries(presentAxes.map((a) => [a.scale, {}])),
       },
+      // The first present axis (normally depth, on the left) keeps uPlot's
+      // default gridlines; any additional right-side axis stacked next to it
+      // (temp, pressure) suppresses its own grid so the two don't overlay
+      // each other at different scales.
       axes: [
         {},
-        { scale: "depth", label: `Depth (${depthUnit})`, side: 3 },
-        { scale: "temp", label: `Temperature (${tempUnit})`, side: 1, grid: { show: false } },
+        ...presentAxes.map((a, i) => ({
+          scale: a.scale,
+          label: `${a.label} (${specs.find((s) => s.scale === a.scale)?.unit ?? a.defaultUnit})`,
+          side: a.side,
+          grid: i === 0 ? undefined : { show: false },
+        })),
       ],
       cursor: {
         drag: { x: true, y: false, uni: 20 },
