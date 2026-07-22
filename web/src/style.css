@@ -128,6 +128,17 @@ body {
   flex-direction: column;
 }
 
+/* An ID selector's `display: flex` above outranks the browser's own
+   `[hidden] { display: none }` default (author styles always beat the
+   user-agent stylesheet), so the `hidden` attribute set on page load and by
+   ChartPanel.close() was doing nothing visually - the panel rendered as an
+   empty flex box the whole time instead of actually disappearing. This rule
+   has higher specificity than the base one above (an extra attribute
+   selector) and wins instead. */
+#chart-panel[hidden] {
+  display: none;
+}
+
 #chart-panel-header {
   display: flex;
   align-items: center;
