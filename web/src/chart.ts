@@ -111,36 +111,40 @@ export class ChartPanel {
     this.airPressureCheckbox.checked = false;
     this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
 
-    const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+    try {
+      const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
 
-    const gwCount = { n: 0 };
-    const isCount = { n: 0 };
-    const wellSeries = await Promise.all(
-      site.wells.map(async (well) => {
-        const isGw = well.well_type === "groundwater";
-        const shade = isGw ? GW_SHADES[gwCount.n % GW_SHADES.length] : IS_SHADES[isCount.n % IS_SHADES.length];
-        if (isGw) gwCount.n++;
-        else isCount.n++;
-        return this.fetchWellSeries(well, shade, yearStart);
-      }),
-    );
+      const gwCount = { n: 0 };
+      const isCount = { n: 0 };
+      const wellSeries = await Promise.all(
+        site.wells.map(async (well) => {
+          const isGw = well.well_type === "groundwater";
+          const shade = isGw ? GW_SHADES[gwCount.n % GW_SHADES.length] : IS_SHADES[isCount.n % IS_SHADES.length];
+          if (isGw) gwCount.n++;
+          else isCount.n++;
+          return this.fetchWellSeries(well, shade, yearStart);
+        }),
+      );
 
-    const atmSeries = await this.fetchAtmSeries(reach.atm_well, yearStart);
+      const atmSeries = await this.fetchAtmSeries(reach.atm_well, yearStart);
 
-    const depthSeries = wellSeries.map((w) => w.depth).filter((s) => s.points.size > 0);
-    const tempSeries = [...wellSeries.map((w) => w.temp), ...(atmSeries.temp ? [atmSeries.temp] : [])].filter(
-      (s) => s.points.size > 0,
-    );
-    const pressureSeries = [...wellSeries.map((w) => w.pressure), ...(atmSeries.pressure ? [atmSeries.pressure] : [])].filter(
-      (s) => s.points.size > 0,
-    );
+      const depthSeries = wellSeries.map((w) => w.depth).filter((s) => s.points.size > 0);
+      const tempSeries = [...wellSeries.map((w) => w.temp), ...(atmSeries.temp ? [atmSeries.temp] : [])].filter(
+        (s) => s.points.size > 0,
+      );
+      const pressureSeries = [...wellSeries.map((w) => w.pressure), ...(atmSeries.pressure ? [atmSeries.pressure] : [])].filter(
+        (s) => s.points.size > 0,
+      );
 
-    if (depthSeries.length === 0 && tempSeries.length === 0 && pressureSeries.length === 0) {
-      this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this site's wells yet.</div>`;
-      return;
+      if (depthSeries.length === 0 && tempSeries.length === 0 && pressureSeries.length === 0) {
+        this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this site's wells yet.</div>`;
+        return;
+      }
+
+      this.render([...depthSeries, ...tempSeries, ...pressureSeries]);
+    } catch (err) {
+      this.showLoadError(err);
     }
-
-    this.render([...depthSeries, ...tempSeries, ...pressureSeries]);
   }
 
   // Reach.atm_well isn't part of any Site, so it has no chart entry point
@@ -154,41 +158,58 @@ export class ChartPanel {
     this.togglesEl.hidden = true;
     this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
 
-    const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
-    const [tempResult, pressureResult] = await Promise.all([
-      fetchWellReadings(atmWell.id, "air_temperature", yearStart),
-      fetchWellReadings(atmWell.id, "air_pressure", yearStart),
-    ]);
+    try {
+      const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+      const [tempResult, pressureResult] = await Promise.all([
+        fetchWellReadings(atmWell.id, "air_temperature", yearStart),
+        fetchWellReadings(atmWell.id, "air_pressure", yearStart),
+      ]);
 
-    const specs: SeriesSpec[] = [];
-    if (tempResult.points.length > 0) {
-      specs.push({
-        label: `${atmWell.name} air temp`,
-        color: ATM_COLOR,
-        scale: "temp",
-        show: true,
-        unit: tempResult.points[0]?.unit ?? "°F",
-        points: toPointMap(tempResult.points),
-      });
-    }
-    if (pressureResult.points.length > 0) {
-      specs.push({
-        label: `${atmWell.name} air pressure`,
-        color: ATM_COLOR,
-        scale: "pressure",
-        dash: [6, 4],
-        show: true,
-        unit: pressureResult.points[0]?.unit ?? "kPa",
-        points: toPointMap(pressureResult.points),
-      });
-    }
+      const specs: SeriesSpec[] = [];
+      if (tempResult.points.length > 0) {
+        specs.push({
+          label: `${atmWell.name} air temp`,
+          color: ATM_COLOR,
+          scale: "temp",
+          show: true,
+          unit: tempResult.points[0]?.unit ?? "°F",
+          points: toPointMap(tempResult.points),
+        });
+      }
+      if (pressureResult.points.length > 0) {
+        specs.push({
+          label: `${atmWell.name} air pressure`,
+          color: ATM_COLOR,
+          scale: "pressure",
+          dash: [6, 4],
+          show: true,
+          unit: pressureResult.points[0]?.unit ?? "kPa",
+          points: toPointMap(pressureResult.points),
+        });
+      }
 
-    if (specs.length === 0) {
-      this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this atmospheric well yet.</div>`;
-      return;
-    }
+      if (specs.length === 0) {
+        this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this atmospheric well yet.</div>`;
+        return;
+      }
 
-    this.render(specs);
+      this.render(specs);
+    } catch (err) {
+      this.showLoadError(err);
+    }
+  }
+
+  // open()/openAtm() previously left the panel stuck on "Loading…" forever
+  // if a fetch failed - the rejection only ever reached console.error via
+  // main.ts's onSelectSite/onSelectAtm, with no visible feedback in the UI
+  // itself (Phase 7 error-handling audit, Implementation Plan.md section 14).
+  private showLoadError(err: unknown): void {
+    console.error(err);
+    const el = document.createElement("div");
+    el.id = "chart-panel-empty";
+    el.textContent = `Failed to load chart data: ${err instanceof Error ? err.message : String(err)}`;
+    this.bodyEl.innerHTML = "";
+    this.bodyEl.appendChild(el);
   }
 
   private async fetchWellSeries(

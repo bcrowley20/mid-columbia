@@ -223,7 +223,15 @@ def update_site(
     if found is None:
         raise HTTPException(status_code=404, detail=f"site {site_id!r} not found")
     reach, site = found
-    project = next(c.project for c in catalogs if c.project.id == reach.project_id)
+    # Bare next() with no default would raise an unhandled StopIteration
+    # instead of the app's usual 404 if this ever came up empty (Phase 7
+    # error-handling audit, Implementation Plan.md section 14) - matches the
+    # explicit-default + None-check pattern routes_wells.py's
+    # _project_owning_well callers already use for the same "project that
+    # owns this entity" lookup.
+    project = next((c.project for c in catalogs if c.project.id == reach.project_id), None)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"project for site {site_id!r} not found")
     try:
         updated = management.update_site(settings.data_root, project, site, body.name, body.latitude, body.longitude)
     except ManagementError as exc:
