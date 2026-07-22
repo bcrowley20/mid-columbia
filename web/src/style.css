@@ -222,6 +222,14 @@ body {
   color: var(--color-text);
 }
 
+#chart-panel-hint {
+  padding: 0.25rem 0.9rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
 #chart-panel-body {
   flex: 1;
   min-height: 0;

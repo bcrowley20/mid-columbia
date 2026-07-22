@@ -254,8 +254,11 @@ export class ChartPanel {
   }
 
   // Wheel = zoom in/out centered on the cursor; shift+wheel = pan without
-  // changing the zoom level; double-click = reset to the full loaded range.
-  // uPlot has no built-in wheel-zoom - this follows the standard recipe from
+  // changing the zoom level (for a plain mouse wheel, which only ever
+  // reports vertical delta); a trackpad's native two-finger left/right swipe
+  // pans directly, no shift needed, since that gesture reports a horizontal
+  // delta on its own. Double-click = reset to the full loaded range. uPlot
+  // has no built-in wheel-zoom - this follows the standard recipe from
   // uPlot's own demos, adapted to also support panning.
   private attachWheelZoomAndPan(u: uPlot): void {
     u.over.addEventListener(
@@ -268,8 +271,10 @@ export class ChartPanel {
         const xMax = u.scales.x.max ?? this.fullRange!.max;
         const range = xMax - xMin;
 
-        if (e.shiftKey) {
-          const panBy = (e.deltaY / u.bbox.width) * range;
+        const isTrackpadSwipe = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+        if (e.shiftKey || isTrackpadSwipe) {
+          const delta = isTrackpadSwipe ? e.deltaX : e.deltaY;
+          const panBy = (delta / u.bbox.width) * range;
           u.setScale("x", { min: xMin + panBy, max: xMax + panBy });
         } else {
           const leftPct = left / u.bbox.width;
