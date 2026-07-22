@@ -3,6 +3,7 @@ name = "midcolumbia"
 version = "0.1.0"
 description = "Data ingestion and analysis tool for Mid-Columbia Fisheries stream restoration monitoring"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Brian Crowley", email = "brian@crowleynet.com" }
 ]
