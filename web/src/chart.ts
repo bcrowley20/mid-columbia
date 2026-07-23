@@ -24,6 +24,37 @@ const GW_SHADES = ["#2563eb", "#1e3a8a", "#38bdf8"]; // royal blue, navy, sky
 const IS_SHADES = ["#059669", "#14532d", "#4ade80"]; // emerald, forest, light green
 const ATM_COLOR = "#dc2626";
 
+// Export image layout (ChartPanel.exportImage) - a fixed 16:9 canvas sized
+// for dropping straight into a slide/document, independent of whatever
+// aspect ratio the live bottom panel happens to be on screen. Rendered at
+// EXPORT_SCALE for a crisp image at presentation size, not just a 1:1 grab
+// of the (much smaller) on-screen chart.
+const EXPORT_WIDTH = 1600;
+const EXPORT_HEIGHT = 900;
+const EXPORT_SCALE = 2;
+const EXPORT_PAD = 24;
+const EXPORT_LOGO_HEIGHT = 56;
+const EXPORT_LEGEND_ROW_HEIGHT = 26;
+const EXPORT_LEGEND_SWATCH_WIDTH = 28;
+const EXPORT_LEGEND_ITEM_GAP = 24;
+const EXPORT_FONT = "13px system-ui, -apple-system, sans-serif";
+const EXPORT_TEXT_COLOR = "#1e293b"; // --color-text
+
+// The File System Access API (window.showSaveFilePicker) is what actually
+// pops the native "choose a save location" dialog the user asked for -
+// Chromium-only as of writing, not yet in TypeScript's bundled DOM lib.
+// FileSystemFileHandle/FileSystemWritableFileStream are already declared
+// there (used elsewhere for drag-and-drop), so only the entry point itself
+// needs augmenting.
+declare global {
+  interface Window {
+    showSaveFilePicker?: (options: {
+      suggestedName?: string;
+      types?: { description?: string; accept: Record<string, string[]> }[];
+    }) => Promise<FileSystemFileHandle>;
+  }
+}
+
 interface SeriesSpec {
   label: string;
   color: string;
@@ -62,6 +93,8 @@ export class ChartPanel {
   private waterPressureIndices: number[] = [];
   private airTempIndex: number | null = null;
   private airPressureIndex: number | null = null;
+  private currentSpecs: SeriesSpec[] = [];
+  private logoImagePromise: Promise<HTMLImageElement> | null = null;
 
   constructor() {
     this.panel = document.querySelector<HTMLElement>("#chart-panel")!;
@@ -75,7 +108,7 @@ export class ChartPanel {
     this.airPressureCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-pressure")!;
 
     document.querySelector<HTMLButtonElement>("#chart-panel-close")!.addEventListener("click", () => this.close());
-    document.querySelector<HTMLButtonElement>("#chart-reset-zoom")!.addEventListener("click", () => this.resetZoom());
+    document.querySelector<HTMLButtonElement>("#chart-export")!.addEventListener("click", () => this.exportImage());
     this.waterTempCheckbox.addEventListener("change", () => {
       for (const idx of this.waterTempIndices) this.plot?.setSeries(idx, { show: this.waterTempCheckbox.checked });
     });
@@ -99,6 +132,7 @@ export class ChartPanel {
     this.panel.hidden = true;
     this.plot?.destroy();
     this.plot = null;
+    this.currentSpecs = [];
   }
 
   async open(reach: ReachOut, site: SiteOut): Promise<void> {
@@ -296,6 +330,7 @@ export class ChartPanel {
     this.plot?.destroy();
     this.plot = null;
     this.bodyEl.innerHTML = "";
+    this.currentSpecs = specs;
 
     // uPlot requires every series to share one x-axis array. Loggers don't
     // necessarily sample on the exact same second, so timestamps are snapped
@@ -488,6 +523,93 @@ export class ChartPanel {
     }
   }
 
+  // Renders the currently-visible series into a fixed 16:9 PNG (logo upper
+  // right, a legend, no title - presentation-ready, not a screenshot of the
+  // live panel) and hands it to the browser's save dialog. The zoom range
+  // stays whatever's currently selected (double-click still resets it, same
+  // as before the Reset zoom button was replaced by this one).
+  private async exportImage(): Promise<void> {
+    if (!this.plot || this.currentSpecs.length === 0) return;
+
+    const button = document.querySelector<HTMLButtonElement>("#chart-export")!;
+    button.disabled = true;
+    try {
+      const logo = await this.loadLogo();
+      const blob = await this.renderExportImage(this.plot, logo);
+      await saveBlob(blob, this.suggestedExportFilename());
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  private loadLogo(): Promise<HTMLImageElement> {
+    if (!this.logoImagePromise) {
+      this.logoImagePromise = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("failed to load the Mid-Columbia logo for the export"));
+        img.src = "/logo.png";
+      });
+    }
+    return this.logoImagePromise;
+  }
+
+  private renderExportImage(u: uPlot, logo: HTMLImageElement): Promise<Blob> {
+    const visibleSpecs = this.currentSpecs.filter((_, i) => u.series[i + 1]?.show);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = EXPORT_WIDTH * EXPORT_SCALE;
+    canvas.height = EXPORT_HEIGHT * EXPORT_SCALE;
+    const ctx = canvas.getContext("2d")!;
+    ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, EXPORT_WIDTH, EXPORT_HEIGHT);
+
+    const logoHeight = EXPORT_LOGO_HEIGHT;
+    const logoWidth = (logo.width / logo.height) * logoHeight;
+    ctx.drawImage(logo, EXPORT_WIDTH - EXPORT_PAD - logoWidth, EXPORT_PAD * 0.5, logoWidth, logoHeight);
+
+    const legendRows = layoutLegend(ctx, visibleSpecs, EXPORT_WIDTH - EXPORT_PAD * 2);
+    const legendHeight = legendRows.length > 0 ? legendRows.length * EXPORT_LEGEND_ROW_HEIGHT + EXPORT_PAD : 0;
+
+    const chartX = EXPORT_PAD;
+    const chartY = EXPORT_PAD * 0.5 + logoHeight + EXPORT_PAD * 0.5;
+    const chartWidth = EXPORT_WIDTH - EXPORT_PAD * 2;
+    const chartHeight = EXPORT_HEIGHT - chartY - legendHeight - EXPORT_PAD;
+
+    // Temporarily re-render the live chart at export resolution rather than
+    // just upscaling the (much smaller) on-screen canvas - this stays
+    // synchronous (setSize -> immediate redraw -> drawImage, no awaits in
+    // between) so the browser never paints the oversized intermediate state.
+    const onScreenSize = this.chartSize();
+    u.setSize({ width: Math.round(chartWidth), height: Math.round(chartHeight) });
+    try {
+      ctx.drawImage(u.ctx.canvas, chartX, chartY, chartWidth, chartHeight);
+    } finally {
+      u.setSize(onScreenSize);
+    }
+
+    drawLegend(ctx, legendRows, EXPORT_PAD, EXPORT_HEIGHT - legendHeight);
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("failed to render the chart export image"));
+      }, "image/png");
+    });
+  }
+
+  private suggestedExportFilename(): string {
+    const base = (this.titleEl.textContent ?? "chart")
+      .replace(/\s*›\s*/g, " - ")
+      .replace(/[<>:"/\\|?*]/g, "-")
+      .trim();
+    return `${base || "chart"}.png`;
+  }
+
   private resize(): void {
     if (this.plot) {
       this.plot.setSize(this.chartSize());
@@ -507,6 +629,93 @@ export class ChartPanel {
       width: this.bodyEl.clientWidth - paddingX,
       height: this.bodyEl.clientHeight - paddingY,
     };
+  }
+}
+
+interface LegendItem {
+  label: string;
+  color: string;
+  dash?: number[];
+}
+
+// Wraps visible series into rows that fit `maxWidth`, measured up front so
+// exportImage() knows how tall to make the legend band before it lays out
+// the chart above it. A hand-drawn canvas legend (swatch + label per series)
+// rather than rasterizing the on-screen uPlot legend DOM/CSS - simpler and
+// more reliable across browsers than serializing arbitrary HTML into an
+// image, and this app has no other DOM-to-image dependency to reach for.
+function layoutLegend(ctx: CanvasRenderingContext2D, specs: SeriesSpec[], maxWidth: number): LegendItem[][] {
+  ctx.font = EXPORT_FONT;
+  const rows: LegendItem[][] = [];
+  let row: LegendItem[] = [];
+  let rowWidth = 0;
+  for (const spec of specs) {
+    const itemWidth = EXPORT_LEGEND_SWATCH_WIDTH + 6 + ctx.measureText(spec.label).width + EXPORT_LEGEND_ITEM_GAP;
+    if (row.length > 0 && rowWidth + itemWidth > maxWidth) {
+      rows.push(row);
+      row = [];
+      rowWidth = 0;
+    }
+    row.push({ label: spec.label, color: spec.color, dash: spec.dash });
+    rowWidth += itemWidth;
+  }
+  if (row.length > 0) rows.push(row);
+  return rows;
+}
+
+function drawLegend(ctx: CanvasRenderingContext2D, rows: LegendItem[][], x: number, y: number): void {
+  ctx.font = EXPORT_FONT;
+  ctx.textBaseline = "middle";
+  rows.forEach((row, rowIndex) => {
+    let cursorX = x;
+    const rowY = y + rowIndex * EXPORT_LEGEND_ROW_HEIGHT + EXPORT_LEGEND_ROW_HEIGHT / 2;
+    for (const item of row) {
+      ctx.strokeStyle = item.color;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash(item.dash ?? []);
+      ctx.beginPath();
+      ctx.moveTo(cursorX, rowY);
+      ctx.lineTo(cursorX + EXPORT_LEGEND_SWATCH_WIDTH - 6, rowY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = EXPORT_TEXT_COLOR;
+      ctx.fillText(item.label, cursorX + EXPORT_LEGEND_SWATCH_WIDTH, rowY);
+
+      cursorX += EXPORT_LEGEND_SWATCH_WIDTH + 6 + ctx.measureText(item.label).width + EXPORT_LEGEND_ITEM_GAP;
+    }
+  });
+}
+
+// Prefers the native "choose where to save" dialog (File System Access API)
+// the user asked for; falls back to a plain <a download> click - still a
+// real save, just via the browser's own download flow/prompt - on browsers
+// that don't support it (Firefox, Safari as of writing).
+async function saveBlob(blob: Blob, suggestedName: string): Promise<void> {
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return; // user cancelled - not an error
+      throw err;
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = suggestedName;
+    a.click();
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
