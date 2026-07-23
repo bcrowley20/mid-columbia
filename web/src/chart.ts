@@ -549,20 +549,28 @@ export class ChartPanel {
   private async exportImage(): Promise<void> {
     if (!this.plot || this.currentSpecs.length === 0) return;
 
-    // Ask up front, before doing any rendering work, so cancelling the
-    // prompt costs nothing - also doubles as the "let the user name the
-    // file" step for browsers without the native save dialog below, where
-    // there'd otherwise be no chance to rename it at all.
-    const name = prompt("File name for the exported chart image:", this.suggestedExportBaseName());
-    if (name === null) return; // user cancelled
-    const filename = `${name.replace(/\.png$/i, "").trim() || "chart"}.png`;
-
     const button = document.querySelector<HTMLButtonElement>("#chart-export")!;
     button.disabled = true;
     try {
+      // Choosing where to save has to happen FIRST, before any rendering -
+      // showSaveFilePicker() only works while still "handling a user
+      // gesture," a short-lived window Chrome starts counting down from the
+      // instant this click fired. The first version of this feature did the
+      // (multi-step, async) chart re-render before asking where to save,
+      // which regularly ran out that window and made the native picker fail
+      // with "Must be handling a user gesture to show a file picker" -
+      // reported after it shipped, and only sometimes on a second click
+      // once. It also means there's no separate "type a filename" prompt
+      // anymore on top of the native dialog: showSaveFilePicker's own
+      // suggestedName field is already an editable filename box in the same
+      // dialog, so a second, redundant text prompt in front of it was both
+      // the cause of the bug and pointless UI once removed.
+      const target = await chooseSaveTarget(`${this.suggestedExportBaseName()}.png`);
+      if (target === null) return; // user cancelled
+
       const logo = await this.loadLogo();
       const blob = await this.renderExportImage(logo);
-      await saveBlob(blob, filename);
+      await target.save(blob);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     } finally {
@@ -778,36 +786,55 @@ function drawLegend(ctx: CanvasRenderingContext2D, rows: LegendItem[][], x: numb
   });
 }
 
-// Prefers the native "choose where to save" dialog (File System Access API)
-// the user asked for; falls back to a plain <a download> click - still a
-// real save, just via the browser's own download flow/prompt - on browsers
-// that don't support it (Firefox, Safari as of writing).
-async function saveBlob(blob: Blob, suggestedName: string): Promise<void> {
+interface SaveTarget {
+  save(blob: Blob): Promise<void>;
+}
+
+// Resolves *where* to save before anything gets rendered (see exportImage's
+// comment on why the ordering matters). Prefers the native "choose where to
+// save" dialog (File System Access API) - its own suggestedName field is
+// already an editable filename box, so that single native dialog covers
+// both "pick a location" and "let the user name the file." Falls back to a
+// plain <a download> click on browsers without it (Firefox, Safari as of
+// writing), which has no naming UI of its own - a lightweight prompt() only
+// runs there, once, to make up for it.
+async function chooseSaveTarget(suggestedName: string): Promise<SaveTarget | null> {
   if (window.showSaveFilePicker) {
+    let handle: FileSystemFileHandle;
     try {
-      const handle = await window.showSaveFilePicker({
+      handle = await window.showSaveFilePicker({
         suggestedName,
         types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
       });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return;
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return; // user cancelled - not an error
+      if (err instanceof DOMException && err.name === "AbortError") return null; // user cancelled - not an error
       throw err;
     }
+    return {
+      async save(blob: Blob) {
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      },
+    };
   }
 
-  const url = URL.createObjectURL(blob);
-  try {
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = suggestedName;
-    a.click();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  const name = prompt("File name for the exported chart image:", suggestedName.replace(/\.png$/i, ""));
+  if (name === null) return null; // user cancelled
+  const filename = `${name.replace(/\.png$/i, "").trim() || "chart"}.png`;
+  return {
+    async save(blob: Blob) {
+      const url = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    },
+  };
 }
 
 function toPointMap(points: { timestamp_utc: string; value: number | null }[]): Map<number, number> {
