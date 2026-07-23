@@ -266,6 +266,50 @@ body {
   color: var(--color-text);
 }
 
+#chart-panel-year-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+/* Same specificity trap as #chart-panel[hidden] / #chart-panel-toggles[hidden]
+   above: this rule's id selector otherwise outranks the browser's
+   `[hidden] { display: none }` default. */
+#chart-panel-year-row[hidden] {
+  display: none;
+}
+
+#chart-panel-year-row-label {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+#chart-panel-year-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.chart-year-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chart-year-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 #chart-panel-hint {
   padding: 0.25rem 0.9rem;
   font-size: 0.75rem;

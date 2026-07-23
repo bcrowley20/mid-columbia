@@ -65,7 +65,29 @@ interface SeriesSpec {
   // shared chart-wide time grid.
   points: Map<number, number>;
   unit: string;
+  // Explicit source flag - render()'s water-vs-air series classification
+  // used to test `color === ATM_COLOR`, which broke once year mode (below)
+  // repurposes color to mean "which year" instead of "which source."
+  isAtm?: boolean;
 }
+
+// Year-over-year comparison (ChartPanel.selectedYears). Deliberately picked
+// from outside blue/green/red - this app already uses those for well
+// identity elsewhere (GW_SHADES, IS_SHADES, ATM_COLOR, and the map markers
+// in map.ts), so a year-colored line reusing one of those hues could read
+// as "this is an in-stream well" instead of "this is 2025." Validated with
+// the dataviz skill's validate_palette.js (light mode; this app has no dark
+// theme to validate against) - ALL CHECKS PASS on this order (orange,
+// violet, aqua, magenta, yellow); the CVD-separation and surface-contrast
+// checks land in the skill's documented "WARN but legal with visible
+// labels" band, which this chart already satisfies via its always-on
+// legend and per-series hover tips.
+const YEAR_COLORS = ["#eb6834", "#4a3aa7", "#1baf7a", "#e87ba4", "#eda100"];
+// A leap year, so a real leap year's Feb 29 always has a slot to remap onto
+// (a non-leap real year just never produces a point there - no special
+// casing needed).
+const YEAR_REFERENCE = 2000;
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // Left-to-right precedence for the non-x axes actually present in a given
 // render() call - a chart never declares an axis for a scale nobody plotted
@@ -87,13 +109,24 @@ export class ChartPanel {
   private readonly waterPressureCheckbox: HTMLInputElement;
   private readonly airTempCheckbox: HTMLInputElement;
   private readonly airPressureCheckbox: HTMLInputElement;
+  private readonly yearRowEl: HTMLElement;
+  private readonly yearTogglesEl: HTMLElement;
   private plot: uPlot | null = null;
   private fullRange: { min: number; max: number } | null = null;
   private waterTempIndices: number[] = [];
   private waterPressureIndices: number[] = [];
   private airTempIndex: number | null = null;
   private airPressureIndex: number | null = null;
+  // Raw, un-year-expanded specs from the last fetch - what a year toggle
+  // re-renders from (no re-fetch needed). Distinct from renderedSpecs below.
   private currentSpecs: SeriesSpec[] = [];
+  // The specs actually plotted in `this.plot` right now - identical to
+  // currentSpecs when no year is selected, otherwise the year-expanded (base
+  // spec x selected year) list. 1:1 aligned with `this.plot.series[1..]`,
+  // which exportImage() needs (see renderExportImage).
+  private renderedSpecs: SeriesSpec[] = [];
+  private availableYears: number[] = [];
+  private selectedYears: Set<number> = new Set();
   private logoImagePromise: Promise<HTMLImageElement> | null = null;
 
   constructor() {
@@ -106,6 +139,8 @@ export class ChartPanel {
     this.waterPressureCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-water-pressure")!;
     this.airTempCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-temp")!;
     this.airPressureCheckbox = document.querySelector<HTMLInputElement>("#chart-toggle-air-pressure")!;
+    this.yearRowEl = document.querySelector<HTMLElement>("#chart-panel-year-row")!;
+    this.yearTogglesEl = document.querySelector<HTMLElement>("#chart-panel-year-toggles")!;
 
     document.querySelector<HTMLButtonElement>("#chart-panel-close")!.addEventListener("click", () => this.close());
     document.querySelector<HTMLButtonElement>("#chart-export")!.addEventListener("click", () => this.exportImage());
@@ -133,6 +168,10 @@ export class ChartPanel {
     this.plot?.destroy();
     this.plot = null;
     this.currentSpecs = [];
+    this.renderedSpecs = [];
+    this.availableYears = [];
+    this.selectedYears = new Set();
+    this.renderYearToggles();
   }
 
   async open(reach: ReachOut, site: SiteOut): Promise<void> {
@@ -143,11 +182,10 @@ export class ChartPanel {
     this.waterPressureCheckbox.checked = false;
     this.airTempCheckbox.checked = false;
     this.airPressureCheckbox.checked = false;
+    this.selectedYears = new Set();
     this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
 
     try {
-      const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
-
       const gwCount = { n: 0 };
       const isCount = { n: 0 };
       const wellSeries = await Promise.all(
@@ -156,11 +194,11 @@ export class ChartPanel {
           const shade = isGw ? GW_SHADES[gwCount.n % GW_SHADES.length] : IS_SHADES[isCount.n % IS_SHADES.length];
           if (isGw) gwCount.n++;
           else isCount.n++;
-          return this.fetchWellSeries(well, shade, yearStart);
+          return this.fetchWellSeries(well, shade);
         }),
       );
 
-      const atmSeries = await this.fetchAtmSeries(reach.atm_well, yearStart);
+      const atmSeries = await this.fetchAtmSeries(reach.atm_well);
 
       const depthSeries = wellSeries.map((w) => w.depth).filter((s) => s.points.size > 0);
       const tempSeries = [...wellSeries.map((w) => w.temp), ...(atmSeries.temp ? [atmSeries.temp] : [])].filter(
@@ -171,12 +209,19 @@ export class ChartPanel {
       );
 
       if (depthSeries.length === 0 && tempSeries.length === 0 && pressureSeries.length === 0) {
+        this.availableYears = [];
+        this.renderYearToggles();
         this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this site's wells yet.</div>`;
         return;
       }
 
-      this.render([...depthSeries, ...tempSeries, ...pressureSeries]);
+      const allSpecs = [...depthSeries, ...tempSeries, ...pressureSeries];
+      this.availableYears = computeAvailableYears(allSpecs);
+      this.renderYearToggles();
+      this.render(allSpecs);
     } catch (err) {
+      this.availableYears = [];
+      this.renderYearToggles();
       this.showLoadError(err);
     }
   }
@@ -190,13 +235,13 @@ export class ChartPanel {
     this.panel.hidden = false;
     this.titleEl.textContent = `${reach.name} › ${atmWell.name} (atmospheric reference)`;
     this.togglesEl.hidden = true;
+    this.selectedYears = new Set();
     this.bodyEl.innerHTML = `<div id="chart-panel-empty">Loading…</div>`;
 
     try {
-      const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
       const [tempResult, pressureResult] = await Promise.all([
-        fetchWellReadings(atmWell.id, "air_temperature", yearStart),
-        fetchWellReadings(atmWell.id, "air_pressure", yearStart),
+        fetchWellReadings(atmWell.id, "air_temperature"),
+        fetchWellReadings(atmWell.id, "air_pressure"),
       ]);
 
       const specs: SeriesSpec[] = [];
@@ -208,6 +253,7 @@ export class ChartPanel {
           show: true,
           unit: tempResult.points[0]?.unit ?? "°F",
           points: toPointMap(tempResult.points),
+          isAtm: true,
         });
       }
       if (pressureResult.points.length > 0) {
@@ -219,16 +265,23 @@ export class ChartPanel {
           show: true,
           unit: pressureResult.points[0]?.unit ?? "kPa",
           points: toPointMap(pressureResult.points),
+          isAtm: true,
         });
       }
 
       if (specs.length === 0) {
+        this.availableYears = [];
+        this.renderYearToggles();
         this.bodyEl.innerHTML = `<div id="chart-panel-empty">No readings for this atmospheric well yet.</div>`;
         return;
       }
 
+      this.availableYears = computeAvailableYears(specs);
+      this.renderYearToggles();
       this.render(specs);
     } catch (err) {
+      this.availableYears = [];
+      this.renderYearToggles();
       this.showLoadError(err);
     }
   }
@@ -249,12 +302,11 @@ export class ChartPanel {
   private async fetchWellSeries(
     well: WellOut,
     color: string,
-    from: Date,
   ): Promise<{ depth: SeriesSpec; temp: SeriesSpec; pressure: SeriesSpec }> {
     const [depthResult, tempResult, pressureResult] = await Promise.all([
-      fetchWellReadings(well.id, "water_depth", from),
-      fetchWellReadings(well.id, "water_temperature", from),
-      fetchWellReadings(well.id, "water_pressure", from),
+      fetchWellReadings(well.id, "water_depth"),
+      fetchWellReadings(well.id, "water_temperature"),
+      fetchWellReadings(well.id, "water_pressure"),
     ]);
     return {
       depth: {
@@ -288,11 +340,10 @@ export class ChartPanel {
 
   private async fetchAtmSeries(
     atmWell: WellOut,
-    from: Date,
   ): Promise<{ temp: SeriesSpec | null; pressure: SeriesSpec | null }> {
     const [tempResult, pressureResult] = await Promise.all([
-      fetchWellReadings(atmWell.id, "air_temperature", from),
-      fetchWellReadings(atmWell.id, "air_pressure", from),
+      fetchWellReadings(atmWell.id, "air_temperature"),
+      fetchWellReadings(atmWell.id, "air_pressure"),
     ]);
     return {
       temp:
@@ -306,6 +357,7 @@ export class ChartPanel {
               show: false,
               unit: tempResult.points[0]?.unit ?? "°F",
               points: toPointMap(tempResult.points),
+              isAtm: true,
             },
       pressure:
         pressureResult.points.length === 0
@@ -318,8 +370,65 @@ export class ChartPanel {
               show: false,
               unit: pressureResult.points[0]?.unit ?? "kPa",
               points: toPointMap(pressureResult.points),
+              isAtm: true,
             },
     };
+  }
+
+  // Expands each base spec into one derived spec per selected year (color
+  // repurposed to mean "which year", see YEAR_COLORS) - or returns baseSpecs
+  // unchanged when no year is selected, which is what makes "deselect every
+  // year" a plain no-op back to the normal continuous-timeline view.
+  private buildEffectiveSpecs(baseSpecs: SeriesSpec[]): SeriesSpec[] {
+    if (this.selectedYears.size === 0) return baseSpecs;
+
+    const years = [...this.selectedYears].sort((a, b) => a - b);
+    const effective: SeriesSpec[] = [];
+    for (const base of baseSpecs) {
+      for (const year of years) {
+        const points = remapPointsToYear(base.points, year);
+        if (points.size === 0) continue; // this base series has no data in that year
+        effective.push({ ...base, label: `${base.label} ${year}`, color: this.colorForYear(year), points });
+      }
+    }
+    return effective;
+  }
+
+  // Color follows the year itself (its position in availableYears), never
+  // selection order - so a given year is always the same color whether it's
+  // the only one checked or the third one checked.
+  private colorForYear(year: number): string {
+    const index = this.availableYears.indexOf(year);
+    return YEAR_COLORS[(index < 0 ? 0 : index) % YEAR_COLORS.length];
+  }
+
+  // Rebuilds the "Compare years" toggle row from this.availableYears - has
+  // to happen in JS (unlike the static water-temp/pressure checkboxes
+  // already in index.html) since the set of years is data-dependent.
+  private renderYearToggles(): void {
+    this.yearTogglesEl.innerHTML = "";
+    this.yearRowEl.hidden = this.availableYears.length === 0;
+
+    for (const year of this.availableYears) {
+      const label = document.createElement("label");
+      label.className = "chart-year-toggle";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = this.selectedYears.has(year);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) this.selectedYears.add(year);
+        else this.selectedYears.delete(year);
+        this.render(this.currentSpecs); // re-render from already-fetched data, no re-fetch
+      });
+
+      const swatch = document.createElement("span");
+      swatch.className = "chart-year-swatch";
+      swatch.style.background = this.colorForYear(year);
+
+      label.append(checkbox, swatch, document.createTextNode(String(year)));
+      this.yearTogglesEl.appendChild(label);
+    }
   }
 
   // Shared by the live interactive render() below and by renderChartBitmap()
@@ -362,8 +471,20 @@ export class ChartPanel {
       })),
     ];
 
+    // Year mode (this.selectedYears non-empty) locks the x-axis to the full
+    // Jan-Dec span of the synthetic YEAR_REFERENCE, regardless of how much
+    // of it the selected years' data actually covers, and drops the (fake)
+    // year from tick labels - read here rather than threaded through as a
+    // parameter since both render() (live chart) and renderChartBitmap()
+    // (export) share this method and both need the same behavior.
+    const yearMode = this.selectedYears.size > 0;
+    const yearRange: [number, number] = [
+      Date.UTC(YEAR_REFERENCE, 0, 1) / 1000,
+      Date.UTC(YEAR_REFERENCE, 11, 31, 23, 59, 59) / 1000,
+    ];
+
     const scales: uPlot.Scales = {
-      x: { time: true },
+      x: yearMode ? { time: true, range: yearRange } : { time: true },
       ...Object.fromEntries(presentAxes.map((a) => [a.scale, {}])),
     };
 
@@ -372,7 +493,7 @@ export class ChartPanel {
     // (temp, pressure) suppresses its own grid so the two don't overlay
     // each other at different scales.
     const axes: uPlot.Axis[] = [
-      {},
+      yearMode ? { values: formatMonthOnlyAxisValues } : {},
       ...presentAxes.map((a, i) => ({
         scale: a.scale,
         label: `${a.label} (${specs.find((s) => s.scale === a.scale)?.unit ?? a.defaultUnit})`,
@@ -381,10 +502,17 @@ export class ChartPanel {
       })),
     ];
 
-    return { series, scales, axes, data: data as uPlot.AlignedData, xMin: xs[0], xMax: xs[xs.length - 1] };
+    return {
+      series,
+      scales,
+      axes,
+      data: data as uPlot.AlignedData,
+      xMin: yearMode ? yearRange[0] : xs[0],
+      xMax: yearMode ? yearRange[1] : xs[xs.length - 1],
+    };
   }
 
-  private render(specs: SeriesSpec[]): void {
+  private render(baseSpecs: SeriesSpec[]): void {
     // destroy() also detaches the legend even though it's mounted outside
     // `bodyEl` (into the header's #chart-panel-legend) - needed here since
     // open() can be called again, for a different site, without close() ever
@@ -392,7 +520,13 @@ export class ChartPanel {
     this.plot?.destroy();
     this.plot = null;
     this.bodyEl.innerHTML = "";
-    this.currentSpecs = specs;
+    this.currentSpecs = baseSpecs;
+
+    // Year toggle changes call render(this.currentSpecs) again - re-deriving
+    // the year-expanded list fresh each time from the raw base specs rather
+    // than re-fetching. Identical to baseSpecs when no year is selected.
+    const specs = this.buildEffectiveSpecs(baseSpecs);
+    this.renderedSpecs = specs;
 
     this.waterTempIndices = [];
     this.waterPressureIndices = [];
@@ -401,10 +535,10 @@ export class ChartPanel {
     specs.forEach((spec, i) => {
       const seriesIdx = i + 1;
       if (spec.scale === "temp") {
-        if (spec.color === ATM_COLOR) this.airTempIndex = seriesIdx;
+        if (spec.isAtm) this.airTempIndex = seriesIdx;
         else this.waterTempIndices.push(seriesIdx);
       } else if (spec.scale === "pressure") {
-        if (spec.color === ATM_COLOR) this.airPressureIndex = seriesIdx;
+        if (spec.isAtm) this.airPressureIndex = seriesIdx;
         else this.waterPressureIndices.push(seriesIdx);
       }
     });
@@ -596,7 +730,10 @@ export class ChartPanel {
     // (mutated by the toggle checkboxes via setSeries), not on the original
     // SeriesSpec.show defaults - reflect exactly what's currently visible,
     // both in the legend and in the freshly re-rendered chart below.
-    const exportSpecs = this.currentSpecs.map((spec, i) => ({ ...spec, show: u.series[i + 1]?.show ?? spec.show }));
+    // renderedSpecs (not currentSpecs, the raw pre-year-expansion base list)
+    // is what's 1:1 aligned with u.series[1..] - year mode can plot more
+    // series than there are base specs.
+    const exportSpecs = this.renderedSpecs.map((spec, i) => ({ ...spec, show: u.series[i + 1]?.show ?? spec.show }));
     const visibleSpecs = exportSpecs.filter((s) => s.show);
     const xRange = { min: u.scales.x!.min ?? this.fullRange!.min, max: u.scales.x!.max ?? this.fullRange!.max };
 
@@ -855,10 +992,79 @@ function toPointMap(points: { timestamp_utc: string; value: number | null }[]): 
   return result;
 }
 
+// A jump this large between two consecutive real samples counts as a
+// genuine gap (e.g. a logger pulled for the off-season) rather than a
+// normal missed-reading blip - see the comment below on why it needs a
+// synthetic grid point.
+const GAP_THRESHOLD_SECONDS = HOUR_SECONDS * 24;
+
 function buildHourGrid(specs: SeriesSpec[]): number[] {
   const keys = new Set<number>();
   for (const spec of specs) {
     for (const hour of spec.points.keys()) keys.add(hour);
   }
-  return [...keys].sort((a, b) => a - b);
+  const sorted = [...keys].sort((a, b) => a - b);
+
+  // The grid is only the union of hours where *some* series actually has a
+  // reading - fine for density (no reason to carry thousands of all-null
+  // hourly slots through an active deployment), but it means a real gap
+  // between two clusters (e.g. no well at this site logged anything for
+  // months) has no grid point in between at all. With no index to be null
+  // at, series.spanGaps: false (chart.ts's render()) has nothing to break
+  // on, so uPlot just connects the last point before the gap straight to
+  // the first point after it - fabricating a trend across months with no
+  // actual readings. This became reachable for the first time once
+  // open()/openAtm() started fetching full multi-year history instead of
+  // just the current year (year-over-year comparison work) - caught by
+  // hovering mid-"gap" in a live browser and seeing a real tooltip value
+  // where there should have been nothing to hover. One synthetic timestamp
+  // inserted mid-gap - deliberately absent from every series' own points,
+  // so `spec.points.get(t) ?? null` is null for all of them - gives
+  // spanGaps something to actually break at.
+  const grid: number[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i] - sorted[i - 1] > GAP_THRESHOLD_SECONDS) {
+      grid.push(Math.floor((sorted[i - 1] + sorted[i]) / 2));
+    }
+    grid.push(sorted[i]);
+  }
+  return grid;
+}
+
+// Union of every calendar year (UTC) present across every spec's points,
+// regardless of that spec's current `show` state - a year toggle should
+// still be offered for e.g. water temperature even while that checkbox is
+// off, since checking it later shouldn't require re-detecting years.
+function computeAvailableYears(specs: SeriesSpec[]): number[] {
+  const years = new Set<number>();
+  for (const spec of specs) {
+    for (const epochSeconds of spec.points.keys()) {
+      years.add(new Date(epochSeconds * 1000).getUTCFullYear());
+    }
+  }
+  return [...years].sort((a, b) => a - b);
+}
+
+// Filters `points` down to one real calendar year, then rewrites each
+// timestamp's year to YEAR_REFERENCE (keeping month/day/hour) so different
+// years' data can share one Jan-Dec x-axis.
+function remapPointsToYear(points: Map<number, number>, year: number): Map<number, number> {
+  const result = new Map<number, number>();
+  for (const [epochSeconds, value] of points) {
+    const d = new Date(epochSeconds * 1000);
+    if (d.getUTCFullYear() !== year) continue;
+    const remapped = Date.UTC(YEAR_REFERENCE, d.getUTCMonth(), d.getUTCDate(), d.getUTCHours()) / 1000;
+    result.set(remapped, value);
+  }
+  return result;
+}
+
+// Custom x-axis tick formatter for year mode - "Mon D", deliberately never
+// printing YEAR_REFERENCE itself, since that year is synthetic and would
+// otherwise misleadingly imply the data is literally from the year 2000.
+function formatMonthOnlyAxisValues(_u: uPlot, splits: number[]): (string | null)[] {
+  return splits.map((s) => {
+    const d = new Date(s * 1000);
+    return `${MONTH_ABBR[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  });
 }
