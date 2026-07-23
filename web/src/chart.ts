@@ -322,16 +322,18 @@ export class ChartPanel {
     };
   }
 
-  private render(specs: SeriesSpec[]): void {
-    // destroy() also detaches the legend even though it's mounted outside
-    // `bodyEl` (into the header's #chart-panel-legend) - needed here since
-    // open() can be called again, for a different site, without close() ever
-    // running first (clicking straight from one site's marker to another's).
-    this.plot?.destroy();
-    this.plot = null;
-    this.bodyEl.innerHTML = "";
-    this.currentSpecs = specs;
-
+  // Shared by the live interactive render() below and by renderChartBitmap()
+  // (the export path's own fresh off-screen instance) - both need the exact
+  // same series/scales/axes/data shape, only their surrounding uPlot options
+  // (cursor, legend, hooks, container size) differ.
+  private buildChartLayout(specs: SeriesSpec[]): {
+    series: uPlot.Series[];
+    scales: uPlot.Scales;
+    axes: uPlot.Axis[];
+    data: uPlot.AlignedData;
+    xMin: number;
+    xMax: number;
+  } {
     // uPlot requires every series to share one x-axis array. Loggers don't
     // necessarily sample on the exact same second, so timestamps are snapped
     // to the nearest hour to build one shared grid - the "interpolat[ion] for
@@ -341,21 +343,6 @@ export class ChartPanel {
     const grid = buildHourGrid(specs);
     const xs = grid.map((t) => t);
     const data: (number | null)[][] = [xs, ...specs.map((spec) => grid.map((t) => spec.points.get(t) ?? null))];
-
-    this.waterTempIndices = [];
-    this.waterPressureIndices = [];
-    this.airTempIndex = null;
-    this.airPressureIndex = null;
-    specs.forEach((spec, i) => {
-      const seriesIdx = i + 1;
-      if (spec.scale === "temp") {
-        if (spec.color === ATM_COLOR) this.airTempIndex = seriesIdx;
-        else this.waterTempIndices.push(seriesIdx);
-      } else if (spec.scale === "pressure") {
-        if (spec.color === ATM_COLOR) this.airPressureIndex = seriesIdx;
-        else this.waterPressureIndices.push(seriesIdx);
-      }
-    });
 
     // Only declare an axis (and its scale) for a series kind actually present
     // in this render - e.g. openAtm()'s chart has no "depth" series at all,
@@ -375,8 +362,54 @@ export class ChartPanel {
       })),
     ];
 
-    const xMin = xs[0];
-    const xMax = xs[xs.length - 1];
+    const scales: uPlot.Scales = {
+      x: { time: true },
+      ...Object.fromEntries(presentAxes.map((a) => [a.scale, {}])),
+    };
+
+    // The first present axis (normally depth, on the left) keeps uPlot's
+    // default gridlines; any additional right-side axis stacked next to it
+    // (temp, pressure) suppresses its own grid so the two don't overlay
+    // each other at different scales.
+    const axes: uPlot.Axis[] = [
+      {},
+      ...presentAxes.map((a, i) => ({
+        scale: a.scale,
+        label: `${a.label} (${specs.find((s) => s.scale === a.scale)?.unit ?? a.defaultUnit})`,
+        side: a.side,
+        grid: i === 0 ? undefined : { show: false },
+      })),
+    ];
+
+    return { series, scales, axes, data: data as uPlot.AlignedData, xMin: xs[0], xMax: xs[xs.length - 1] };
+  }
+
+  private render(specs: SeriesSpec[]): void {
+    // destroy() also detaches the legend even though it's mounted outside
+    // `bodyEl` (into the header's #chart-panel-legend) - needed here since
+    // open() can be called again, for a different site, without close() ever
+    // running first (clicking straight from one site's marker to another's).
+    this.plot?.destroy();
+    this.plot = null;
+    this.bodyEl.innerHTML = "";
+    this.currentSpecs = specs;
+
+    this.waterTempIndices = [];
+    this.waterPressureIndices = [];
+    this.airTempIndex = null;
+    this.airPressureIndex = null;
+    specs.forEach((spec, i) => {
+      const seriesIdx = i + 1;
+      if (spec.scale === "temp") {
+        if (spec.color === ATM_COLOR) this.airTempIndex = seriesIdx;
+        else this.waterTempIndices.push(seriesIdx);
+      } else if (spec.scale === "pressure") {
+        if (spec.color === ATM_COLOR) this.airPressureIndex = seriesIdx;
+        else this.waterPressureIndices.push(seriesIdx);
+      }
+    });
+
+    const { series, scales, axes, data, xMin, xMax } = this.buildChartLayout(specs);
     this.fullRange = { min: xMin, max: xMax };
 
     // One small floating label per series, positioned exactly at that
@@ -392,23 +425,8 @@ export class ChartPanel {
       width,
       height,
       series,
-      scales: {
-        x: { time: true },
-        ...Object.fromEntries(presentAxes.map((a) => [a.scale, {}])),
-      },
-      // The first present axis (normally depth, on the left) keeps uPlot's
-      // default gridlines; any additional right-side axis stacked next to it
-      // (temp, pressure) suppresses its own grid so the two don't overlay
-      // each other at different scales.
-      axes: [
-        {},
-        ...presentAxes.map((a, i) => ({
-          scale: a.scale,
-          label: `${a.label} (${specs.find((s) => s.scale === a.scale)?.unit ?? a.defaultUnit})`,
-          side: a.side,
-          grid: i === 0 ? undefined : { show: false },
-        })),
-      ],
+      scales,
+      axes,
       cursor: {
         drag: { x: true, y: false, uni: 20 },
       },
@@ -456,10 +474,10 @@ export class ChartPanel {
           },
         ],
       },
-      data: data as uPlot.AlignedData,
+      data,
     };
 
-    this.plot = new uPlot(opts, data as uPlot.AlignedData, this.bodyEl);
+    this.plot = new uPlot(opts, data, this.bodyEl);
     this.attachWheelZoomAndPan(this.plot);
     tipEls.forEach((el) => this.plot!.over.appendChild(el));
 
@@ -531,12 +549,20 @@ export class ChartPanel {
   private async exportImage(): Promise<void> {
     if (!this.plot || this.currentSpecs.length === 0) return;
 
+    // Ask up front, before doing any rendering work, so cancelling the
+    // prompt costs nothing - also doubles as the "let the user name the
+    // file" step for browsers without the native save dialog below, where
+    // there'd otherwise be no chance to rename it at all.
+    const name = prompt("File name for the exported chart image:", this.suggestedExportBaseName());
+    if (name === null) return; // user cancelled
+    const filename = `${name.replace(/\.png$/i, "").trim() || "chart"}.png`;
+
     const button = document.querySelector<HTMLButtonElement>("#chart-export")!;
     button.disabled = true;
     try {
       const logo = await this.loadLogo();
-      const blob = await this.renderExportImage(this.plot, logo);
-      await saveBlob(blob, this.suggestedExportFilename());
+      const blob = await this.renderExportImage(logo);
+      await saveBlob(blob, filename);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     } finally {
@@ -556,8 +582,15 @@ export class ChartPanel {
     return this.logoImagePromise;
   }
 
-  private renderExportImage(u: uPlot, logo: HTMLImageElement): Promise<Blob> {
-    const visibleSpecs = this.currentSpecs.filter((_, i) => u.series[i + 1]?.show);
+  private async renderExportImage(logo: HTMLImageElement): Promise<Blob> {
+    const u = this.plot!;
+    // Current on/off state per series lives on the live uPlot instance
+    // (mutated by the toggle checkboxes via setSeries), not on the original
+    // SeriesSpec.show defaults - reflect exactly what's currently visible,
+    // both in the legend and in the freshly re-rendered chart below.
+    const exportSpecs = this.currentSpecs.map((spec, i) => ({ ...spec, show: u.series[i + 1]?.show ?? spec.show }));
+    const visibleSpecs = exportSpecs.filter((s) => s.show);
+    const xRange = { min: u.scales.x!.min ?? this.fullRange!.min, max: u.scales.x!.max ?? this.fullRange!.max };
 
     const canvas = document.createElement("canvas");
     canvas.width = EXPORT_WIDTH * EXPORT_SCALE;
@@ -577,19 +610,21 @@ export class ChartPanel {
 
     const chartX = EXPORT_PAD;
     const chartY = EXPORT_PAD * 0.5 + logoHeight + EXPORT_PAD * 0.5;
-    const chartWidth = EXPORT_WIDTH - EXPORT_PAD * 2;
-    const chartHeight = EXPORT_HEIGHT - chartY - legendHeight - EXPORT_PAD;
+    const chartWidth = Math.round(EXPORT_WIDTH - EXPORT_PAD * 2);
+    const chartHeight = Math.round(EXPORT_HEIGHT - chartY - legendHeight - EXPORT_PAD);
 
-    // Temporarily re-render the live chart at export resolution rather than
-    // just upscaling the (much smaller) on-screen canvas - this stays
-    // synchronous (setSize -> immediate redraw -> drawImage, no awaits in
-    // between) so the browser never paints the oversized intermediate state.
-    const onScreenSize = this.chartSize();
-    u.setSize({ width: Math.round(chartWidth), height: Math.round(chartHeight) });
+    // A genuinely fresh, off-screen uPlot instance built at exactly the
+    // export's target size, rather than resizing-then-restoring the live
+    // on-screen one - resizing an already-rendered instance turned out to
+    // visibly distort the result (everything stretched vertically, reported
+    // after the first version of this feature shipped), so this renders
+    // once at the real target dimensions instead of trying to reshape an
+    // existing render after the fact.
+    const chartBitmap = await this.renderChartBitmap(exportSpecs, chartWidth, chartHeight, xRange);
     try {
-      ctx.drawImage(u.ctx.canvas, chartX, chartY, chartWidth, chartHeight);
+      ctx.drawImage(chartBitmap, chartX, chartY, chartWidth, chartHeight);
     } finally {
-      u.setSize(onScreenSize);
+      chartBitmap.close();
     }
 
     drawLegend(ctx, legendRows, EXPORT_PAD, EXPORT_HEIGHT - legendHeight);
@@ -602,12 +637,68 @@ export class ChartPanel {
     });
   }
 
-  private suggestedExportFilename(): string {
+  // Builds a one-off uPlot instance in a detached, off-screen container at
+  // exactly (width, height), captures it as a bitmap, then tears it down -
+  // isolated from the live/on-screen chart entirely, so the export can never
+  // visibly disturb it and doesn't inherit any of its current DOM/CSS state.
+  private async renderChartBitmap(
+    specs: SeriesSpec[],
+    width: number,
+    height: number,
+    xRange: { min: number; max: number },
+  ): Promise<ImageBitmap> {
+    const { series, scales, axes, data } = this.buildChartLayout(specs);
+    scales.x = { ...scales.x, range: [xRange.min, xRange.max] };
+
+    const container = document.createElement("div");
+    container.style.position = "fixed";
+    container.style.left = "-10000px";
+    container.style.top = "0";
+    document.body.appendChild(container);
+
+    try {
+      // uPlot defers its actual first paint to a microtask (its internal
+      // commit() -> queueMicrotask(_commit)) rather than drawing
+      // synchronously inside the constructor - capturing the canvas right
+      // after `new uPlot(...)` grabbed it still blank. `ready` fires once
+      // that deferred draw has genuinely happened, so wait for it instead
+      // of assuming construction == painted (the bug behind the first
+      // version of this rewrite: a blank chart under the export logo).
+      return await new Promise<ImageBitmap>((resolve, reject) => {
+        new uPlot(
+          {
+            width,
+            height,
+            series,
+            scales,
+            axes,
+            legend: { show: false },
+            cursor: { show: false },
+            hooks: {
+              ready: [
+                (u) => {
+                  createImageBitmap(u.ctx.canvas)
+                    .then(resolve, reject)
+                    .finally(() => u.destroy());
+                },
+              ],
+            },
+          },
+          data,
+          container,
+        );
+      });
+    } finally {
+      container.remove();
+    }
+  }
+
+  private suggestedExportBaseName(): string {
     const base = (this.titleEl.textContent ?? "chart")
       .replace(/\s*›\s*/g, " - ")
       .replace(/[<>:"/\\|?*]/g, "-")
       .trim();
-    return `${base || "chart"}.png`;
+    return base || "chart";
   }
 
   private resize(): void {
