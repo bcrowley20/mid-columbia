@@ -13,8 +13,10 @@ def test_scan_all_against_real_carlson_data_has_no_errors(tmp_path: Path, data_r
 
     assert result.errors == []
     # 6 groundwater folders (incl. Site 3's two) * 3 downloads + 1 ATM * 3 + 5 in-stream * 3
-    assert result.files_scanned == 36
-    assert result.files_ingested == 36
+    # = 36, plus a mocked 2027 comparison year for Site 3 + the ATM (GW 3a,
+    # GW 3b, IS 3, ATM * 3 downloads each = +12) = 48.
+    assert result.files_scanned == 48
+    assert result.files_ingested == 48
     assert result.readings_ingested > 0
     assert result.events_ingested > 0
     # Stored count can be lower than the parsed count: XLSX downloads are
@@ -40,7 +42,7 @@ def test_rescan_is_idempotent(tmp_path: Path, data_root: Path):
 def test_hobo_files_are_silently_skipped(tmp_path: Path, data_root: Path):
     conn = db.connect(tmp_path / "test.sqlite3")
     result = scan_all(data_root, conn, ALL_HANDLERS)
-    # 36 recognized files is strictly fewer than every file on disk under the
+    # 48 recognized files is strictly fewer than every file on disk under the
     # wells (the .hobo project files are present too but never dispatched).
     all_files_under_wells = sum(
         1

@@ -471,20 +471,31 @@ export class ChartPanel {
       })),
     ];
 
-    // Year mode (this.selectedYears non-empty) locks the x-axis to the full
-    // Jan-Dec span of the synthetic YEAR_REFERENCE, regardless of how much
-    // of it the selected years' data actually covers, and drops the (fake)
-    // year from tick labels - read here rather than threaded through as a
-    // parameter since both render() (live chart) and renderChartBitmap()
-    // (export) share this method and both need the same behavior.
+    // Year mode (this.selectedYears non-empty) defaults the x-axis to the
+    // full Jan-Dec span of the synthetic YEAR_REFERENCE, regardless of how
+    // much of it the selected years' data actually covers, and drops the
+    // (fake) year from tick labels - read here rather than threaded through
+    // as a parameter since both render() (live chart) and
+    // renderChartBitmap() (export) share this method and both need the same
+    // behavior.
     const yearMode = this.selectedYears.size > 0;
     const yearRange: [number, number] = [
       Date.UTC(YEAR_REFERENCE, 0, 1) / 1000,
       Date.UTC(YEAR_REFERENCE, 11, 31, 23, 59, 59) / 1000,
     ];
 
+    // NOT `x: { range: yearRange }` here - uPlot turns a plain array `range`
+    // into a function that always returns exactly that tuple and forces
+    // `scale.auto = false`, so every redraw (including the ones triggered
+    // by attachWheelZoomAndPan's own setScale calls) snapped straight back
+    // to the full year - the reported "zoom/pan doesn't work in year mode"
+    // bug. render() instead calls plot.setScale() once, right after
+    // construction, the same mechanism drag/wheel/pan already use, so nothing
+    // fights their later calls. renderChartBitmap()'s export path still sets
+    // scales.x.range directly afterward - fine there, since that instance is
+    // a one-shot, never-interacted-with off-screen render.
     const scales: uPlot.Scales = {
-      x: yearMode ? { time: true, range: yearRange } : { time: true },
+      x: { time: true },
       ...Object.fromEntries(presentAxes.map((a) => [a.scale, {}])),
     };
 
@@ -612,6 +623,15 @@ export class ChartPanel {
     };
 
     this.plot = new uPlot(opts, data, this.bodyEl);
+    // uPlot's own auto-range would default to the actual plotted data's
+    // extent (e.g. just Feb-Apr), not the full year - this is what actually
+    // makes the year-mode default view span the whole Jan-Dec range, via
+    // the same setScale() mechanism drag/wheel/pan use themselves, so
+    // nothing about it blocks their later calls (see buildChartLayout's
+    // comment on why this isn't done via scales.x.range instead).
+    if (this.selectedYears.size > 0) {
+      this.plot.setScale("x", { min: this.fullRange.min, max: this.fullRange.max });
+    }
     this.attachWheelZoomAndPan(this.plot);
     tipEls.forEach((el) => this.plot!.over.appendChild(el));
 

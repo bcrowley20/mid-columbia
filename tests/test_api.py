@@ -222,7 +222,7 @@ def test_startup_lifespan_auto_ingests(tmp_path: Path, data_root: Path):
         assert r.status_code == 200
         status = r.json()
         assert status["has_run"] is True
-        assert status["result"]["files_ingested"] == 36
+        assert status["result"]["files_ingested"] == 48
         assert status["result"]["wells_processed"] == 11
         assert status["result"]["errors"] == []
 
@@ -231,7 +231,7 @@ def test_ingest_run_then_status(empty_client: TestClient):
     r = empty_client.post("/api/ingest/run")
     assert r.status_code == 200
     result = r.json()
-    assert result["files_ingested"] == 36
+    assert result["files_ingested"] == 48
     assert result["readings_ingested"] > 0
     assert result["wells_processed"] == 11
     assert result["errors"] == []
@@ -240,7 +240,7 @@ def test_ingest_run_then_status(empty_client: TestClient):
     assert r.status_code == 200
     status = r.json()
     assert status["has_run"] is True
-    assert status["result"]["files_ingested"] == 36
+    assert status["result"]["files_ingested"] == 48
 
 
 def test_ingest_run_is_idempotent_on_rerun(empty_client: TestClient):
